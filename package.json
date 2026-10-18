@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
-    "mysql2": "^3.11.5",
+    "mysql2": "^3.24.6",
     "razorpay": "^2.9.8",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

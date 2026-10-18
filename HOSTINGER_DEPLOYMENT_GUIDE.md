@@ -17,27 +17,34 @@ This project is pre-configured for **Hostinger Cloud / VPS / Node.js Web Hosting
 
 ---
 
-## Step 1: Create & Import the MySQL Database in Hostinger
+## Step 1: Import Database Schema in Hostinger phpMyAdmin
 
-1. Log in to **Hostinger hPanel** → **Databases** → **Management**.
-2. Create a new MySQL Database and User (for example):
-   - **Database Name**: `u123456789_societyos`
-   - **MySQL Username**: `u123456789_admin`
-   - **MySQL Password**: *(your strong password)*
-3. Click **Enter phpMyAdmin** next to your newly created database.
-4. Go to the **Import** tab in phpMyAdmin:
-   - Choose **`database/mysql_schema.sql`**
-   - Click **Import / Go** at the bottom.
-   - All **37 tables** (`societies`, `users`, `society_members`, `member_bills`, `payments`, `society_invoices`, `notifications`, `platform_settings`, etc.) and initial accounts will be created automatically.
+> [!CAUTION]
+> **DO NOT upload `hostinger-societyos-mysql-deploy.zip` into phpMyAdmin!**
+> `hostinger-societyos-mysql-deploy.zip` contains the entire Node.js application (frontend, backend, node scripts). If uploaded to phpMyAdmin, MariaDB will return error `#1064 - You have an error in your SQL syntax near '7\007F...'`.
+>
+> In phpMyAdmin, you must ONLY upload the database file:
+> - **`database/mysql_schema.sql`** (raw SQL, 298 KB)
+> - OR **`database/societyos_schema.sql.zip`** (compressed SQL for phpMyAdmin, 42 KB)
+
+1. Open your Hostinger phpMyAdmin:
+   `https://auth-db2267.hstgr.io/index.php?route=/database/structure&db=u445169163_societysas`
+2. Click on the database name **`u445169163_societysas`** on the left sidebar.
+3. Click the **Import** tab at the top.
+4. Click **Choose File** / **Browse...** and select either:
+   - **`database/mysql_schema.sql`**
+   - OR **`database/societyos_schema.sql.zip`**
+5. Leave all format options as default (**SQL**) and click **Import** (or **Go**).
+6. All 37 tables will be created and seeded immediately without any syntax errors!
 
 ---
 
-## Step 2: Upload Project to Hostinger
+## Step 2: Upload Application Files to Hostinger File Manager
 
-### Option A: Using Hostinger File Manager (Upload ZIP)
 1. Open **Hostinger hPanel** → **Files** → **File Manager**.
-2. Navigate to `domains/yourdomain.com/public_html`.
-3. Upload **`hostinger-societyos-mysql-deploy.zip`** and right-click → **Extract**.
+2. Navigate to your website folder (e.g., `public_html`).
+3. Upload **`hostinger-societyos-mysql-deploy.zip`** here.
+4. Right-click **`hostinger-societyos-mysql-deploy.zip`** → **Extract** (into current directory).
 
 ### Option B: Using Git / SSH
 ```bash
