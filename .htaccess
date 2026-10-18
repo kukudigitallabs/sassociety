@@ -1,0 +1,24 @@
+# ============================================================================
+# SocietyOS — Hostinger Apache / LiteSpeed Configuration (.htaccess)
+# Routes /api/* and /uploads/* to the Node.js server and serves React SPA
+# ============================================================================
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Proxy API and uploaded files to Node.js backend if running on internal port 4000
+  RewriteCond %{REQUEST_URI} ^/api/ [OR]
+  RewriteCond %{REQUEST_URI} ^/uploads/
+  RewriteRule ^(.*)$ http://127.0.0.1:4000/$1 [P,L]
+
+  # Serve static assets from dist/ if present
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{DOCUMENT_ROOT}/dist/%{REQUEST_URI} -f
+  RewriteRule ^(.*)$ /dist/$1 [L]
+
+  # SPA Fallback to index.html
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.html [QSA,L]
+</IfModule>
