@@ -16,17 +16,15 @@
     "test": "node --test tests/acceptance.test.ts"
   },
   "dependencies": {
-    "lucide-react": "^0.468.0",
-    "mysql2": "^3.24.6",
-    "razorpay": "^2.9.8",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  },
-  "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "^0.468.0",
+    "mysql2": "^3.24.6",
+    "razorpay": "^2.9.8",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"
   }
