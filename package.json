@@ -9,8 +9,8 @@
   },
   "scripts": {
     "dev": "node --watch server/index.ts",
-    "start": "node app.js",
-    "start:prod": "NODE_ENV=production node app.js",
+    "start": "node --experimental-strip-types app.js",
+    "start:prod": "NODE_ENV=production node --experimental-strip-types app.js",
     "build": "vite build",
     "generate:mysql": "node scripts/generate-mysql-bundle.ts",
     "test": "node --test tests/acceptance.test.ts"

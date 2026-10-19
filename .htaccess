@@ -1,24 +1,28 @@
 # ============================================================================
 # SocietyOS — Hostinger Apache / LiteSpeed Configuration (.htaccess)
-# Routes /api/* and /uploads/* to the Node.js server and serves React SPA
+# Compatible with Hostinger Shared, Cloud, and Business Web Hosting
 # ============================================================================
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
 
-  # Proxy API and uploaded files to Node.js backend if running on internal port 4000
-  RewriteCond %{REQUEST_URI} ^/api/ [OR]
-  RewriteCond %{REQUEST_URI} ^/uploads/
-  RewriteRule ^(.*)$ http://127.0.0.1:4000/$1 [P,L]
+  # 1. Do not rewrite if the file or folder exists directly in root
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
 
-  # Serve static assets from dist/ if present
-  RewriteCond %{REQUEST_FILENAME} !-f
-  RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteCond %{DOCUMENT_ROOT}/dist/%{REQUEST_URI} -f
-  RewriteRule ^(.*)$ /dist/$1 [L]
+  # 2. If the requested asset exists inside dist/ (e.g. /assets/*, favicon, etc.), serve from dist/
+  RewriteCond %{DOCUMENT_ROOT}/dist/$1 -f
+  RewriteRule ^(.*)$ dist/$1 [L]
 
-  # SPA Fallback to index.html
-  RewriteCond %{REQUEST_FILENAME} !-f
-  RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule ^ index.html [QSA,L]
+  # 3. Route all SPA pages to dist/index.html if dist/ exists
+  RewriteCond %{DOCUMENT_ROOT}/dist/index.html -f
+  RewriteRule ^(.*)$ dist/index.html [L]
+
+  # 4. Fallback to root index.html
+  RewriteRule ^(.*)$ index.html [L]
 </IfModule>
+
+# Prevent directory listings
+Options -Indexes
