@@ -1,0 +1,51 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: societyos-app
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - DB_DRIVER=mysql
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=societyos
+      - MYSQL_USER=society_admin
+      - MYSQL_PASSWORD=SocietyPassword@123
+      - JWT_SECRET=societyos_docker_local_secret_key_2026
+      - RAZORPAY_KEY_ID=rzp_test_TpIGmZQJ7x3t3P
+      - RAZORPAY_KEY_SECRET=J855unI9vpDKw3WpzStw8Bru
+      - VITE_RAZORPAY_KEY_ID=rzp_test_TpIGmZQJ7x3t3P
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0
+    container_name: societyos-mysql
+    restart: unless-stopped
+    ports:
+      - "33066:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=RootPassword@123
+      - MYSQL_DATABASE=societyos
+      - MYSQL_USER=society_admin
+      - MYSQL_PASSWORD=SocietyPassword@123
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/mysql_schema.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pRootPassword@123"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  mysql_data:

@@ -29,6 +29,19 @@ A production-ready, multi-tenant **Society Management Software SaaS Platform** b
 
 ## Quick Start & Commands
 
+### Running Locally with Docker (Recommended)
+```bash
+# Start full stack (SocietyOS App on port 4000 + Local MySQL on port 33066)
+docker compose up -d
+
+# View container logs
+docker compose logs -f
+
+# Stop containers
+docker compose down
+```
+
+### Running Locally with Node.js
 ```bash
 # 1. Install dependencies
 npm install
