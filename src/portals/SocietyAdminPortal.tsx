@@ -23,6 +23,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ShieldAlert,
+  ShieldCheck,
   ArrowRightLeft,
   Bell,
   Clock,
@@ -528,19 +529,196 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
 
                 const superAdminNotices: any[] = dashData?.superAdminNotifications || [];
                 const unreadSuperAdminNotices = superAdminNotices.filter((n) => !n.is_read);
-                const isPaymentDueOrTrial =
+
+                // Dues notification is displayed ONLY when <= 30 days remain to renewal,
+                // or if subscription is EXPIRED, trial is pending, or payment/approval is overdue.
+                // Otherwise (> 30 days remain & ACTIVE & PAID & APPROVED), display ONLY the status of the subscription.
+                const isRenewalDue =
                   subSummary.subscriptionStatus !== 'ACTIVE' ||
                   subSummary.paymentStatus !== 'PAID' ||
                   subSummary.approvalStatus !== 'APPROVED' ||
-                  subSummary.daysRemaining <= 30 ||
-                  unreadSuperAdminNotices.length > 0;
+                  subSummary.daysRemaining <= 30;
 
+                if (!isRenewalDue) {
+                  return (
+                    <div
+                      className="card"
+                      style={{
+                        background: 'var(--bg-subtle)',
+                        borderColor: 'var(--border)',
+                        borderWidth: '1px',
+                        padding: '1.1rem 1.35rem',
+                        display: 'grid',
+                        gap: '0.9rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'flex-start',
+                          flexWrap: 'wrap',
+                          gap: '0.85rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: 36,
+                              height: 36,
+                              borderRadius: 10,
+                              background: '#059669',
+                              color: '#fff',
+                            }}
+                          >
+                            <ShieldCheck size={18} />
+                          </span>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                              <h4 style={{ fontSize: '0.98rem', margin: 0 }}>
+                                Society Subscription Status
+                              </h4>
+                              <span className="badge badge-success">
+                                Status: {subSummary.subscriptionStatus}
+                              </span>
+                              <span className="badge badge-success">
+                                Super Admin Approval: {subSummary.approvalStatus}
+                              </span>
+                              <span className="badge badge-success">
+                                Payment: PAID
+                              </span>
+                            </div>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 3 }}>
+                              Your society subscription is active and in good standing. Next renewal is scheduled in {subSummary.daysRemaining} days ({(subSummary.expiryDate || '').slice(0, 10) || 'N/A'}).
+                            </p>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setActiveTab('NOTIFICATIONS')}
+                          >
+                            <Bell size={15} /> Notifications List ({allNotificationsList.length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Clean Subscription Status Metrics (No Dues) */}
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                          gap: '0.75rem',
+                        }}
+                      >
+                        <div
+                          style={{
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                            padding: '0.75rem 1rem',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                            Subscription Plan
+                          </div>
+                          <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: 2 }}>{subSummary.planName}</div>
+                          <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                            Billing Cycle: {subSummary.billingPeriod}
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                            padding: '0.75rem 1rem',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                            Subscription Status
+                          </div>
+                          <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#059669', marginTop: 2 }}>
+                            Fully Paid & Active
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            Plan Fee: {formatCurrency(subSummary.totalAmountDue)} (Paid in Full)
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                            padding: '0.75rem 1rem',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                            Days Until Renewal
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '1.1rem',
+                              fontWeight: 800,
+                              color: '#059669',
+                              marginTop: 2,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                            }}
+                          >
+                            <Clock size={15} />
+                            {subSummary.daysRemaining} Days Remaining
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            Next Renewal Date: {(subSummary.expiryDate || '').slice(0, 10) || 'N/A'}
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                            padding: '0.75rem 1rem',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
+                            Super Admin Approval
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '1rem',
+                              fontWeight: 700,
+                              color: '#059669',
+                              marginTop: 2,
+                            }}
+                          >
+                            Approved & Active
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            Account verified and in good standing
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // When renewal is due (<= 30 days or unpaid/trial): display full dues & renewal notification card
                 return (
                   <div
                     className="card"
                     style={{
-                      background: isPaymentDueOrTrial ? 'var(--warning-bg)' : 'var(--bg-subtle)',
-                      borderColor: isPaymentDueOrTrial ? 'var(--warning)' : 'var(--border)',
+                      background: 'var(--warning-bg)',
+                      borderColor: 'var(--warning)',
                       borderWidth: '1.5px',
                       padding: '1.1rem 1.35rem',
                       display: 'grid',
@@ -565,7 +743,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                             width: 36,
                             height: 36,
                             borderRadius: 10,
-                            background: isPaymentDueOrTrial ? '#f59e0b' : 'var(--brand)',
+                            background: '#f59e0b',
                             color: '#fff',
                           }}
                         >
@@ -594,16 +772,14 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                             >
                               Super Admin Approval: {subSummary.approvalStatus}
                             </span>
-                            <span
-                              className={`badge ${
-                                subSummary.paymentStatus === 'PAID' ? 'badge-success' : 'badge-warning'
-                              }`}
-                            >
-                              Payment: {subSummary.paymentStatus === 'PAID' ? 'PAID' : 'DUE FOR RENEWAL / APPROVAL'}
+                            <span className="badge badge-warning">
+                              Payment: {subSummary.paymentStatus === 'PAID' ? 'RENEWAL DUE' : 'DUE FOR RENEWAL / APPROVAL'}
                             </span>
                           </div>
                           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 3 }}>
-                            Manage your society subscription plan, view Super Admin payment due notices, and renew online for instant approval.
+                            {subSummary.daysRemaining <= 0
+                              ? 'Your subscription is overdue. Please complete renewal payment immediately to avoid service interruption.'
+                              : `Subscription renewal is due in ${subSummary.daysRemaining} days (${(subSummary.expiryDate || '').slice(0, 10)}). Complete payment for instant renewal and approval.`}
                           </p>
                         </div>
                       </div>
@@ -2788,6 +2964,12 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               pendingInvoice: null,
             };
 
+            const isRenewalDue =
+              subSummary.subscriptionStatus !== 'ACTIVE' ||
+              subSummary.paymentStatus !== 'PAID' ||
+              subSummary.approvalStatus !== 'APPROVED' ||
+              subSummary.daysRemaining <= 30;
+
             const superAdminTypes = [
               'SUBSCRIPTION_PAYMENT_DUE',
               'PLATFORM_NOTICE',
@@ -2990,47 +3172,58 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       >
                         <div style={{ fontSize: '0.84rem' }}>
                           <strong>Plan:</strong> {subSummary.planName} •{' '}
-                          <strong>Amount Due:</strong> {formatCurrency(subSummary.totalAmountDue)} (incl. GST) •{' '}
-                          <strong>Days Pending to Renew:</strong>{' '}
-                          {subSummary.daysRemaining >= 0
-                            ? `${subSummary.daysRemaining} Days`
-                            : `Overdue by ${Math.abs(subSummary.daysRemaining)} Days`}
+                          {isRenewalDue ? (
+                            <>
+                              <strong>Amount Due:</strong> {formatCurrency(subSummary.totalAmountDue)} (incl. GST) •{' '}
+                              <strong>Days Pending to Renew:</strong>{' '}
+                              {subSummary.daysRemaining >= 0
+                                ? `${subSummary.daysRemaining} Days`
+                                : `Overdue by ${Math.abs(subSummary.daysRemaining)} Days`}
+                            </>
+                          ) : (
+                            <>
+                              <strong>Status:</strong> <span style={{ color: '#059669', fontWeight: 700 }}>Fully Paid & Active</span> •{' '}
+                              <strong>Next Renewal:</strong> in {subSummary.daysRemaining} Days ({(subSummary.expiryDate || '').slice(0, 10) || 'N/A'})
+                            </>
+                          )}
                         </div>
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={async () => {
-                            try {
-                              await openRazorpayCheckout({
-                                amountRupees: subSummary.totalAmountDue,
-                                currency: 'INR',
-                                receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
-                                merchantName: 'SocietyOS Platform Subscription',
-                                description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
-                                prefill: {
-                                  name: user.fullName || currentSociety.name,
-                                  email: user.email || currentSociety.contact_email,
-                                  contact: user.phone || currentSociety.contact_phone,
-                                },
-                                isSubscription: true,
-                                societyId: currentSociety.id,
-                                planId: subSummary.planId,
-                                subscriptionPaymentId: subSummary.pendingInvoice?.id,
-                                onSuccess: (verified: any) => {
-                                  notify(
-                                    verified?.message ||
-                                      `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified!`
-                                  );
-                                  refreshCurrentTab();
-                                },
-                              });
-                            } catch (err: any) {
-                              notify(err.message || 'Subscription checkout failed.', 'error');
-                            }
-                          }}
-                        >
-                          <CreditCard size={14} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Now
-                        </button>
+                        {isRenewalDue && (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={async () => {
+                              try {
+                                await openRazorpayCheckout({
+                                  amountRupees: subSummary.totalAmountDue,
+                                  currency: 'INR',
+                                  receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
+                                  merchantName: 'SocietyOS Platform Subscription',
+                                  description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
+                                  prefill: {
+                                    name: user.fullName || currentSociety.name,
+                                    email: user.email || currentSociety.contact_email,
+                                    contact: user.phone || currentSociety.contact_phone,
+                                  },
+                                  isSubscription: true,
+                                  societyId: currentSociety.id,
+                                  planId: subSummary.planId,
+                                  subscriptionPaymentId: subSummary.pendingInvoice?.id,
+                                  onSuccess: (verified: any) => {
+                                    notify(
+                                      verified?.message ||
+                                        `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified!`
+                                    );
+                                    refreshCurrentTab();
+                                  },
+                                });
+                              } catch (err: any) {
+                                notify(err.message || 'Subscription checkout failed.', 'error');
+                              }
+                            }}
+                          >
+                            <CreditCard size={14} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Now
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

@@ -1388,13 +1388,15 @@ export function seedInitialDataIfEmpty(): void {
     dedupKey: 'seed:sub-due:soc-royal-palms',
   });
 
+  // Dues notifications are generated only when <= 30 days remain to renewal.
+  // soc-green-valley has 335 days remaining, so it has an active confirmed subscription.
   sendNotification({
     societyId: 'soc-green-valley',
     userId: 'user-admin-green-valley',
-    notificationType: 'SUBSCRIPTION_PAYMENT_DUE',
-    title: 'Upcoming Subscription Renewal & Approval Schedule — Enterprise Annual Plan (₹23,598.82)',
-    message: 'Super Admin Notice: Your Enterprise Annual RWA Suite subscription is active (335 days remaining to renew). Renewal amount: ₹23,598.82 (₹19,999 + 18% GST). You can renew early anytime from your Society Dashboard for instant approval.',
+    notificationType: 'SUBSCRIPTION_PAYMENT_CONFIRMED',
+    title: 'Enterprise Annual Subscription Active & Verified',
+    message: 'Super Admin Notice: Your Enterprise Annual RWA Suite subscription is active and fully approved. Next renewal is scheduled in 335 days.',
     channel: 'IN_APP',
-    dedupKey: 'seed:sub-due:soc-green-valley',
+    dedupKey: 'seed:sub-active:soc-green-valley',
   });
 }

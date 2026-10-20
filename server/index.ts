@@ -54,7 +54,7 @@ export function runScheduledRemindersJob(): void {
       const targetDate = s.subscription_status === 'TRIAL' ? s.trial_ends_at : s.subscription_ends_at;
       if (!targetDate || !s.admin_user_id) continue;
       const daysLeft = Math.ceil((new Date(targetDate).getTime() - Date.now()) / 86400_000);
-      if (daysLeft >= 0 && daysLeft <= 7) {
+      if (daysLeft >= 0 && daysLeft <= 30) {
         sendNotification({
           societyId: s.id,
           userId: s.admin_user_id,
