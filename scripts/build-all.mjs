@@ -61,4 +61,25 @@ try {
   console.warn(`[Build] Hostinger sync notice: ${err.message}`);
 }
 
-console.log(`[Build] All build steps completed successfully! Output ready in dist/`);
+// Ensure dist contains full-stack backend capabilities alongside frontend
+try {
+  const apiDir = path.join(root, 'api');
+  if (fs.existsSync(apiDir)) {
+    fs.cpSync(apiDir, path.join(distDir, 'api'), { recursive: true, force: true });
+  }
+  const distServerDir = path.join(root, 'dist-server');
+  if (fs.existsSync(distServerDir)) {
+    fs.cpSync(distServerDir, path.join(distDir, 'dist-server'), { recursive: true, force: true });
+  }
+  const filesToDist = ['app.js', 'server.js', 'index.js', 'package.json', 'package-lock.json', '.htaccess'];
+  for (const f of filesToDist) {
+    const src = path.join(root, f);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, path.join(distDir, f));
+    }
+  }
+} catch (err) {
+  console.warn(`[Build] Notice syncing backend to dist: ${err.message}`);
+}
+
+console.log(`[Build] All build steps completed successfully! Output ready in dist/ (Frontend + Backend unified)`);

@@ -1,25 +1,36 @@
 # ============================================================================
 # SocietyOS — Hostinger Apache / LiteSpeed Configuration (.htaccess)
+# Compatible with Hostinger Shared, Cloud, and Business Web Hosting
 # ============================================================================
+
+DirectoryIndex dist/index.html index.html index.php
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
 
-  RewriteRule ^index\.html$ - [L]
-
-  # Allow direct access to existing files (js, css, images, svg, etc.)
-  RewriteCond %{REQUEST_FILENAME} -f [OR]
-  RewriteCond %{REQUEST_FILENAME} -d
-  RewriteRule ^ - [L]
-
-  # Route all /api/* requests to api/index.php gateway (prevents HTML fallback)
+  # 1. Route all /api/* requests to api/index.php gateway (prevents HTML fallback)
   RewriteCond %{REQUEST_URI} ^/api(/.*)?$ [NC]
   RewriteRule ^api/(.*)$ api/index.php [QSA,L]
   RewriteRule ^api$ api/index.php [QSA,L]
 
-  # Route all other requests to index.html for React SPA
-  RewriteRule . /index.html [L]
+  # 2. If the requested asset exists inside dist/ (e.g. /assets/*), serve from dist/
+  RewriteCond %{DOCUMENT_ROOT}/dist/$1 -f
+  RewriteRule ^(.*)$ dist/$1 [L]
+
+  # 3. Do not rewrite if the file exists directly on disk (and is not root index.html)
+  RewriteCond %{REQUEST_URI} !^/?$
+  RewriteCond %{REQUEST_URI} !^/index\.html$
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteRule ^ - [L]
+
+  # 4. Route all SPA pages to dist/index.html if dist/ exists
+  RewriteCond %{DOCUMENT_ROOT}/dist/index.html -f
+  RewriteRule ^(.*)$ dist/index.html [L]
+
+  # 5. Fallback to root index.html
+  RewriteRule ^(.*)$ index.html [L]
 </IfModule>
 
+# Prevent directory listings
 Options -Indexes
