@@ -319,8 +319,8 @@ function openSandboxCheckoutModal(opts: {
         <button id="rzp-sandbox-pay" type="button" style="width:100%;padding:0.75rem 1rem;background:#2563eb;color:#fff;font-weight:700;font-size:0.92rem;border:none;border-radius:8px;cursor:pointer;">
           Pay ₹${amountInr} Now
         </button>
-        <button id="rzp-sandbox-fail" type="button" style="width:100%;padding:0.55rem 1rem;background:#fff1f2;color:#be123c;font-weight:600;font-size:0.78rem;border:1px solid #fecdd3;border-radius:8px;cursor:pointer;">
-          Simulate Failed Payment (Test Error Handling)
+        <button id="rzp-sandbox-fail" type="button" style="width:100%;padding:0.35rem 0.5rem;background:transparent;color:#94a3b8;font-size:0.72rem;border:none;cursor:pointer;text-decoration:underline;">
+          (Dev test only: Simulate bank decline)
         </button>
       </div>
       <div style="text-align:center;font-size:0.7rem;color:#64748b;">

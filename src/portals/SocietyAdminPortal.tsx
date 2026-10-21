@@ -540,14 +540,14 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 const superAdminNotices: any[] = dashData?.superAdminNotifications || [];
                 const unreadSuperAdminNotices = superAdminNotices.filter((n) => !n.is_read);
 
-                // Dues notification is displayed ONLY when <= 30 days remain to renewal,
-                // or if subscription is EXPIRED, trial is pending, or payment/approval is overdue.
-                // Otherwise (> 30 days remain & ACTIVE & PAID & APPROVED), display ONLY the status of the subscription.
+                // Dues notification is displayed ONLY when subscription is EXPIRED (daysRemaining <= 0),
+                // trial is pending, or payment/approval is overdue.
+                // When ACTIVE & PAID & APPROVED with days remaining, display the clean green status.
                 const isRenewalDue =
                   subSummary.subscriptionStatus !== 'ACTIVE' ||
                   subSummary.paymentStatus !== 'PAID' ||
                   subSummary.approvalStatus !== 'APPROVED' ||
-                  subSummary.daysRemaining <= 30;
+                  subSummary.daysRemaining <= 0;
 
                 if (!isRenewalDue) {
                   return (
@@ -3023,7 +3023,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               subSummary.subscriptionStatus !== 'ACTIVE' ||
               subSummary.paymentStatus !== 'PAID' ||
               subSummary.approvalStatus !== 'APPROVED' ||
-              subSummary.daysRemaining <= 30;
+              subSummary.daysRemaining <= 0;
 
             const superAdminTypes = [
               'SUBSCRIPTION_PAYMENT_DUE',
