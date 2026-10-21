@@ -11,7 +11,7 @@
     "dev": "node --watch-path=server server/index.ts",
     "start": "node app.js",
     "start:prod": "NODE_ENV=production node app.js",
-    "build": "vite build && node scripts/build-server.mjs",
+    "build": "vite build && node scripts/build-server.mjs && node scripts/sync-hostinger-public-html.mjs",
     "build:server": "node scripts/build-server.mjs",
     "generate:mysql": "node scripts/generate-mysql-bundle.ts",
     "test": "node --test tests/acceptance.test.ts"

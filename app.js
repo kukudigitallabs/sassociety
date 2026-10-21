@@ -45,7 +45,9 @@ if (fs.existsSync(compiledServerPath)) {
 
 const { createServer, runScheduledRemindersJob } = serverModule;
 
-const port = Number(process.env.PORT || 4000);
+const rawPort = process.env.PORT || 4000;
+const isNamedPipeOrSocket = typeof rawPort === 'string' && (rawPort.startsWith('/') || rawPort.startsWith('\\\\') || isNaN(Number(rawPort)));
+const port = isNamedPipeOrSocket ? rawPort : Number(rawPort);
 const isProd = process.env.NODE_ENV === 'production';
 
 const server = await createServer({ withVite: !isProd });
@@ -54,6 +56,12 @@ if (typeof runScheduledRemindersJob === 'function') {
   setInterval(runScheduledRemindersJob, 5 * 60_000).unref();
 }
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`[SocietyOS] Server running in ${isProd ? 'PRODUCTION' : 'DEVELOPMENT'} mode on port ${port}`);
-});
+if (isNamedPipeOrSocket) {
+  server.listen(port, () => {
+    console.log(`[SocietyOS] Server running in ${isProd ? 'PRODUCTION' : 'DEVELOPMENT'} mode on Passenger socket: ${port}`);
+  });
+} else {
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`[SocietyOS] Server running in ${isProd ? 'PRODUCTION' : 'DEVELOPMENT'} mode on port ${port}`);
+  });
+}
