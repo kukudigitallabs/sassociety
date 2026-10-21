@@ -1167,6 +1167,17 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
     // ========================================================================
     // 3. AUTHENTICATION & USER PROFILE ENDPOINTS
     // ========================================================================
+    if (pathname === '/api/auth/login' && method === 'GET') {
+      const accept = String(req.headers['accept'] || '');
+      if (accept.includes('text/html')) {
+        res.writeHead(302, { Location: '/' });
+        return res.end();
+      }
+      return sendJson(res, 405, {
+        error: 'Method Not Allowed. /api/auth/login expects a POST request with JSON credentials: {"email": "...", "password": "..."}. To open the login portal in your browser, visit http://localhost:4000/ or /',
+      });
+    }
+
     if (pathname === '/api/auth/login' && method === 'POST') {
       if (!checkRateLimit(`login:${clientIp}`, 40, 60_000)) {
         return sendJson(res, 429, { error: 'Too many login attempts. Please wait a minute.' });
