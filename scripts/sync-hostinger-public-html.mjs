@@ -63,7 +63,28 @@ if (targetPublicHtml && fs.existsSync(distDir)) {
     }
   }
 
-  // 3. Write rock-solid production .htaccess in public_html
+  // 3. Copy app.js, dist-server/, package.json, and database/ for Node.js runtime compatibility
+  try {
+    const filesToCopy = ['app.js', 'package.json'];
+    for (const f of filesToCopy) {
+      const srcFile = path.resolve(cwd, f);
+      if (fs.existsSync(srcFile)) {
+        fs.copyFileSync(srcFile, path.join(targetPublicHtml, f));
+      }
+    }
+    const dirsToCopy = ['dist-server', 'database'];
+    for (const d of dirsToCopy) {
+      const srcDir = path.resolve(cwd, d);
+      if (fs.existsSync(srcDir)) {
+        fs.cpSync(srcDir, path.join(targetPublicHtml, d), { recursive: true, force: true });
+      }
+    }
+    console.log('[Hostinger Sync] Copied app.js, dist-server/, and package.json to public_html');
+  } catch (err) {
+    console.error('[Hostinger Sync] Error copying server files to public_html:', err.message);
+  }
+
+  // 4. Write rock-solid production .htaccess in public_html
   try {
     const htaccessContent = `# ============================================================================
 # SocietyOS — Hostinger Apache / LiteSpeed Configuration (.htaccess)
