@@ -213,18 +213,30 @@ export async function createServer(options: { withVite?: boolean } = { withVite:
       return;
     }
 
-    const distDir = path.join(process.cwd(), 'dist');
-    const candidate = path.join(distDir, url.pathname === '/' ? 'index.html' : url.pathname);
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-      res.writeHead(200, { 'Content-Type': getStaticMimeType(candidate) });
-      fs.createReadStream(candidate).pipe(res);
-      return;
+    // Look for static assets in ./dist first, then in current working directory root
+    const assetCandidates = [
+      path.join(process.cwd(), 'dist', url.pathname === '/' ? 'index.html' : url.pathname),
+      path.join(process.cwd(), url.pathname === '/' ? 'index.html' : url.pathname),
+    ];
+    for (const candidate of assetCandidates) {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        res.writeHead(200, { 'Content-Type': getStaticMimeType(candidate) });
+        fs.createReadStream(candidate).pipe(res);
+        return;
+      }
     }
-    const fallbackIndex = path.join(distDir, 'index.html');
-    if (fs.existsSync(fallbackIndex)) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      fs.createReadStream(fallbackIndex).pipe(res);
-      return;
+
+    // Fallback to index.html for client-side SPA routing (dist/index.html or ./index.html)
+    const fallbackCandidates = [
+      path.join(process.cwd(), 'dist', 'index.html'),
+      path.join(process.cwd(), 'index.html'),
+    ];
+    for (const fallback of fallbackCandidates) {
+      if (fs.existsSync(fallback) && fs.statSync(fallback).isFile()) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        fs.createReadStream(fallback).pipe(res);
+        return;
+      }
     }
 
     res.writeHead(200, { 'Content-Type': 'text/plain' });

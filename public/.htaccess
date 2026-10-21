@@ -1,3 +1,7 @@
+# ============================================================================
+# SocietyOS — Hostinger Apache / LiteSpeed Configuration (.htaccess)
+# ============================================================================
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
@@ -8,6 +12,11 @@
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]
+
+  # Route all /api/* requests to api/index.php gateway (prevents HTML fallback)
+  RewriteCond %{REQUEST_URI} ^/api(/.*)?$ [NC]
+  RewriteRule ^api/(.*)$ api/index.php [QSA,L]
+  RewriteRule ^api$ api/index.php [QSA,L]
 
   # Route all other requests to index.html for React SPA
   RewriteRule . /index.html [L]

@@ -27,20 +27,32 @@ if (envPath) {
   }
 }
 
-// Default to production mode when dist/index.html is built
+// Default to production mode when dist/index.html or index.html exists
 const distIndex = path.join(process.cwd(), 'dist', 'index.html');
-if (!process.env.NODE_ENV && fs.existsSync(distIndex)) {
+const rootIndex = path.join(process.cwd(), 'index.html');
+if (!process.env.NODE_ENV && (fs.existsSync(distIndex) || fs.existsSync(rootIndex))) {
   process.env.NODE_ENV = 'production';
 }
 
-const { createServer, runScheduledRemindersJob } = await import('./server/index.ts');
+// Prefer pre-compiled pure JavaScript server (dist-server/server.js) for Hostinger production compatibility
+let serverModule;
+const compiledServerPath = path.join(process.cwd(), 'dist-server', 'server.js');
+if (fs.existsSync(compiledServerPath)) {
+  serverModule = await import('./dist-server/server.js');
+} else {
+  serverModule = await import('./server/index.ts');
+}
+
+const { createServer, runScheduledRemindersJob } = serverModule;
 
 const port = Number(process.env.PORT || 4000);
 const isProd = process.env.NODE_ENV === 'production';
 
 const server = await createServer({ withVite: !isProd });
-runScheduledRemindersJob();
-setInterval(runScheduledRemindersJob, 5 * 60_000).unref();
+if (typeof runScheduledRemindersJob === 'function') {
+  runScheduledRemindersJob();
+  setInterval(runScheduledRemindersJob, 5 * 60_000).unref();
+}
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`[SocietyOS] Server running in ${isProd ? 'PRODUCTION' : 'DEVELOPMENT'} mode on port ${port}`);

@@ -3,24 +3,32 @@
 # Compatible with Hostinger Shared, Cloud, and Business Web Hosting
 # ============================================================================
 
+DirectoryIndex dist/index.html index.html index.php
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
 
-  # 1. Do not rewrite if the file or folder exists directly in root
-  RewriteCond %{REQUEST_FILENAME} -f [OR]
-  RewriteCond %{REQUEST_FILENAME} -d
-  RewriteRule ^ - [L]
+  # 1. Route all /api/* requests to api/index.php gateway (prevents HTML fallback)
+  RewriteCond %{REQUEST_URI} ^/api(/.*)?$ [NC]
+  RewriteRule ^api/(.*)$ api/index.php [QSA,L]
+  RewriteRule ^api$ api/index.php [QSA,L]
 
-  # 2. If the requested asset exists inside dist/ (e.g. /assets/*, favicon, etc.), serve from dist/
+  # 2. If the requested asset exists inside dist/ (e.g. /assets/*), serve from dist/
   RewriteCond %{DOCUMENT_ROOT}/dist/$1 -f
   RewriteRule ^(.*)$ dist/$1 [L]
 
-  # 3. Route all SPA pages to dist/index.html if dist/ exists
+  # 3. Do not rewrite if the file exists directly on disk (and is not root index.html)
+  RewriteCond %{REQUEST_URI} !^/?$
+  RewriteCond %{REQUEST_URI} !^/index\.html$
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteRule ^ - [L]
+
+  # 4. Route all SPA pages to dist/index.html if dist/ exists
   RewriteCond %{DOCUMENT_ROOT}/dist/index.html -f
   RewriteRule ^(.*)$ dist/index.html [L]
 
-  # 4. Fallback to root index.html
+  # 5. Fallback to root index.html
   RewriteRule ^(.*)$ index.html [L]
 </IfModule>
 

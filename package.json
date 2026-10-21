@@ -5,17 +5,19 @@
   "type": "module",
   "main": "app.js",
   "engines": {
-    "node": "22.x"
+    "node": ">=18.0.0"
   },
   "scripts": {
     "dev": "node --watch server/index.ts",
-    "start": "node --experimental-strip-types app.js",
-    "start:prod": "NODE_ENV=production node --experimental-strip-types app.js",
-    "build": "vite build",
+    "start": "node app.js",
+    "start:prod": "NODE_ENV=production node app.js",
+    "build": "vite build && node scripts/build-server.mjs",
+    "build:server": "node scripts/build-server.mjs",
     "generate:mysql": "node scripts/generate-mysql-bundle.ts",
     "test": "node --test tests/acceptance.test.ts"
   },
   "dependencies": {
+    "esbuild": "^0.24.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
