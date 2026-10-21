@@ -8,7 +8,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "dev": "node --watch server/index.ts",
+    "dev": "node --watch-path=server server/index.ts",
     "start": "node app.js",
     "start:prod": "NODE_ENV=production node app.js",
     "build": "vite build && node scripts/build-server.mjs",
@@ -17,7 +17,7 @@
     "test": "node --test tests/acceptance.test.ts"
   },
   "dependencies": {
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.25.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

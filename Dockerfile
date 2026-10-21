@@ -10,7 +10,7 @@ RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
 
 # Install all dependencies (including Vite build tooling)
-RUN npm ci
+RUN npm install
 
 # Copy application source code
 COPY . .
@@ -29,4 +29,4 @@ ENV NODE_ENV=production
 ENV PORT=4000
 
 # Start SocietyOS application server
-CMD ["node", "--experimental-strip-types", "app.js"]
+CMD ["node", "app.js"]
