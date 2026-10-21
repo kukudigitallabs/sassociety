@@ -25,7 +25,7 @@ await esbuild.build({
   bundle: true,
   platform: 'node',
   format: 'esm',
-  packages: 'external',
+  external: ['vite', 'fsevents', 'lightningcss'],
   outfile: path.join(outDir, 'server.js'),
   sourcemap: false,
   target: 'node18',
