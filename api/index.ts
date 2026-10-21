@@ -1,27 +1,37 @@
 import path from 'node:path';
-import fs from 'node:fs';
-import { handleApiRequest, sendJson } from '../server/routes.ts';
-import { initDatabase, seedInitialDataIfEmpty } from '../server/db.ts';
-import { extractBearerToken, verifyJwt } from '../server/security.ts';
-import { syncToMysqlAfterWrite } from '../server/mysql.ts';
 
-// On Vercel, use /tmp for SQLite database if not explicitly set
+// On Vercel, ensure SQLite uses /tmp
 if (!process.env.SQLITE_DB_PATH && (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)) {
   process.env.SQLITE_DB_PATH = path.join('/tmp', 'society_saas.db');
 }
 
-const remoteBackend = (process.env.BACKEND_API_URL || process.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+let serverModule: any = null;
+let initError: any = null;
 
-let dbReady = false;
-function ensureInit() {
-  if (!dbReady && !remoteBackend) {
-    try {
-      initDatabase();
-      seedInitialDataIfEmpty();
-    } catch (e) {
-      console.error('[Vercel Serverless DB Init Error]', e);
-    }
-    dbReady = true;
+async function loadServer() {
+  if (serverModule) return serverModule;
+  if (initError) throw initError;
+  try {
+    const routes = await import('../server/routes.ts');
+    const db = await import('../server/db.ts');
+    const security = await import('../server/security.ts');
+    const mysql = await import('../server/mysql.ts');
+
+    db.initDatabase();
+    db.seedInitialDataIfEmpty();
+
+    serverModule = {
+      handleApiRequest: routes.handleApiRequest,
+      sendJson: routes.sendJson,
+      extractBearerToken: security.extractBearerToken,
+      verifyJwt: security.verifyJwt,
+      syncToMysqlAfterWrite: mysql.syncToMysqlAfterWrite,
+    };
+    return serverModule;
+  } catch (err: any) {
+    initError = err;
+    console.error('[Vercel Serverless Initialization Error]:', err);
+    throw err;
   }
 }
 
@@ -37,6 +47,7 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
+  const remoteBackend = (process.env.BACKEND_API_URL || process.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
   const host = req.headers['host'] || 'localhost';
   const proto = req.headers['x-forwarded-proto'] || 'https';
   const reqUrl = req.url || '/';
@@ -66,24 +77,24 @@ export default async function handler(req: any, res: any) {
       res.end(Buffer.from(upstreamBody));
       return;
     } catch (proxyErr: any) {
-      sendJson(res, 502, { error: `Failed to connect to remote backend at ${remoteBackend}: ${proxyErr.message}` });
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Failed to proxy to backend at ${remoteBackend}: ${proxyErr.message}` }));
       return;
     }
   }
 
   // 2. Otherwise run full SocietyOS server routes locally within Vercel Serverless Function
-  ensureInit();
-
   try {
+    const srv = await loadServer();
     const url = new URL(reqUrl, `${proto}://${host}`);
     const method = (req.method || 'GET').toUpperCase();
-    const token = extractBearerToken(req);
-    const auth = token ? verifyJwt(token) : null;
+    const token = srv.extractBearerToken(req);
+    const auth = token ? srv.verifyJwt(token) : null;
     const body = ['GET', 'HEAD'].includes(method)
       ? {}
       : (typeof req.body === 'object' && req.body !== null ? req.body : (req.body ? JSON.parse(String(req.body)) : {}));
 
-    await handleApiRequest({
+    await srv.handleApiRequest({
       req,
       res,
       url,
@@ -93,11 +104,17 @@ export default async function handler(req: any, res: any) {
     });
 
     if (method !== 'GET' && method !== 'HEAD') {
-      syncToMysqlAfterWrite();
+      srv.syncToMysqlAfterWrite();
     }
   } catch (err: any) {
+    console.error('[API Execution Error]:', err);
     if (!res.headersSent) {
-      sendJson(res, 500, { error: err?.message || 'Internal Server Error' });
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: err?.message || 'Internal Server Error',
+        nodeVersion: process.version,
+        detail: String(err?.stack || err),
+      }));
     }
   }
 }

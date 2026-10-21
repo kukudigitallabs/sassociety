@@ -22,8 +22,21 @@ try {
 
 export const db = new DatabaseSync(DB_PATH);
 
-db.exec('PRAGMA journal_mode = WAL;');
-db.exec('PRAGMA foreign_keys = ON;');
+try {
+  if (isServerless) {
+    db.exec('PRAGMA journal_mode = DELETE;');
+  } else {
+    db.exec('PRAGMA journal_mode = WAL;');
+  }
+} catch {
+  try {
+    db.exec('PRAGMA journal_mode = DELETE;');
+  } catch {}
+}
+
+try {
+  db.exec('PRAGMA foreign_keys = ON;');
+} catch {}
 
 export function uuid(): string {
   return crypto.randomUUID();
