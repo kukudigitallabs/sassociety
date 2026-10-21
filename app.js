@@ -8,9 +8,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Load .env if present
-const envPath = path.join(process.cwd(), '.env');
-if (fs.existsSync(envPath)) {
+// Load .env or hostinger.env if present
+const envCandidate = path.join(process.cwd(), '.env');
+const hostingerEnvCandidate = path.join(process.cwd(), 'hostinger.env');
+const envPath = fs.existsSync(envCandidate) ? envCandidate : (fs.existsSync(hostingerEnvCandidate) ? hostingerEnvCandidate : null);
+if (envPath) {
   const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
   for (const line of lines) {
     const trimmed = line.trim();
