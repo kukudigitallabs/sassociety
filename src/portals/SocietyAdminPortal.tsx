@@ -487,7 +487,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               {currentSociety.name} — {user.role === 'SOCIETY_ADMIN' ? t(lang, 'societyAdminPortal') : t(lang, 'staffPortal')}
             </h2>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              {user.fullName} ({user.email}) • Enrolment Code: <code>{currentSociety.enrollment_code}</code>
+              {user?.fullName || user?.email || 'Admin'} ({user?.email || ''}) • Enrolment Code: <code>{currentSociety.enrollment_code}</code>
               {Boolean(currentSociety.is_demo) && <span className="badge badge-warning" style={{ marginLeft: 8 }}>Demo Tenant</span>}
             </div>
           </div>
@@ -814,9 +814,9 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                                 merchantName: 'SocietyOS Platform Subscription',
                                 description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
                                 prefill: {
-                                  name: user.fullName || currentSociety.name,
-                                  email: user.email || currentSociety.contact_email,
-                                  contact: user.phone || currentSociety.contact_phone,
+                                  name: user?.fullName || user?.email || currentSociety.name,
+                                  email: user?.email || currentSociety.contact_email,
+                                  contact: user?.phone || currentSociety.contact_phone,
                                 },
                                 isSubscription: true,
                                 societyId: currentSociety.id,
@@ -3255,9 +3255,9 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                                   merchantName: 'SocietyOS Platform Subscription',
                                   description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
                                   prefill: {
-                                    name: user.fullName || currentSociety.name,
-                                    email: user.email || currentSociety.contact_email,
-                                    contact: user.phone || currentSociety.contact_phone,
+                                    name: user?.fullName || user?.email || currentSociety.name,
+                                    email: user?.email || currentSociety.contact_email,
+                                    contact: user?.phone || currentSociety.contact_phone,
                                   },
                                   isSubscription: true,
                                   societyId: currentSociety.id,

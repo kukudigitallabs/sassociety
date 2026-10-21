@@ -55,6 +55,11 @@ export const App: React.FC = () => {
     }
     try {
       const res = await apiFetch('/api/auth/me');
+      if (!res || !res.user) {
+        setStoredToken(null);
+        setAuthData(null);
+        return;
+      }
       setAuthData({
         user: res.user,
         society: res.society,
@@ -89,7 +94,7 @@ export const App: React.FC = () => {
 
   return (
     <>
-      {!authData ? (
+      {!authData || !authData.user ? (
         <PublicPortal
           lang={lang}
           setLang={setLang}

@@ -203,7 +203,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
           <div>
             <h2 style={{ fontSize: '1.1rem' }}>{t(lang, 'superAdminPortal')}</h2>
             <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-              Signed in as {user.fullName} ({user.email}) • Strictly Isolated Platform Owner Panel
+              Signed in as {user?.fullName || user?.email || 'Super Admin'} ({user?.email || 'owner@societyos.com'}) • Strictly Isolated Platform Owner Panel
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>

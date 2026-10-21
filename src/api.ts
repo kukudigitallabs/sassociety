@@ -35,7 +35,24 @@ export async function apiFetch<T = any>(
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
-  const data = await res.json().catch(() => ({}));
+  const contentType = res.headers.get('content-type') || '';
+  let data: any = {};
+  if (contentType.includes('application/json')) {
+    data = await res.json().catch(() => ({}));
+  } else {
+    const rawText = await res.text().catch(() => '');
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      if (res.ok) {
+        throw new Error(
+          `Backend API not reachable: "${pathname}" returned HTML instead of JSON. Ensure the backend server is running and routing /api requests.`
+        );
+      }
+      throw new Error(`Request failed with status ${res.status}`);
+    }
+  }
+
   if (!res.ok) {
     throw new Error(data.error || `Request failed with status ${res.status}`);
   }

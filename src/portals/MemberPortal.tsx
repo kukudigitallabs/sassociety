@@ -80,10 +80,10 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
 
   // Profile Form
   const [profileForm, setProfileForm] = useState({
-    fullName: user.fullName || '',
-    phone: user.phone || '',
-    emergencyContactName: user.emergencyContactName || '',
-    emergencyContactPhone: user.emergencyContactPhone || '',
+    fullName: user?.fullName || user?.email || '',
+    phone: user?.phone || '',
+    emergencyContactName: user?.emergencyContactName || '',
+    emergencyContactPhone: user?.emergencyContactPhone || '',
   });
 
   async function loadMemberDashboard() {
@@ -91,9 +91,9 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
       const res = await apiFetch('/api/member/dashboard');
       setData(res);
       setProfileForm({
-        fullName: res.member?.full_name || user.fullName || '',
-        phone: res.member?.phone || user.phone || '',
-        emergencyContactName: res.member?.emergency_contact || '',
+        fullName: res?.member?.full_name || user?.fullName || user?.email || '',
+        phone: res?.member?.phone || user?.phone || '',
+        emergencyContactName: res?.member?.emergency_contact || '',
         emergencyContactPhone: '',
       });
     } catch (err: any) {
@@ -201,9 +201,9 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
         merchantName: society.name || 'SocietyOS RWA',
         description: `Maintenance Bill Payment — Flat ${member.flat_number}`,
         prefill: {
-          name: member.full_name || user.fullName || '',
-          email: member.email || user.email || '',
-          contact: member.phone || user.phone || '',
+          name: member?.full_name || user?.fullName || user?.email || '',
+          email: member?.email || user?.email || '',
+          contact: member?.phone || user?.phone || '',
         },
         billIds: validIds,
         onSuccess: (verifyRes) => {

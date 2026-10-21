@@ -153,8 +153,10 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
         method: 'POST',
         body: { email: loginEmail, password: loginPassword },
       });
-      setStoredToken(res.token);
-      notify(`Signed in as ${res.user.fullName} (${res.user.role})`);
+      setStoredToken(res?.token || null);
+      const displayName = res?.user?.fullName || res?.user?.email || 'User';
+      const roleName = res?.user?.role ? ` (${res.user.role})` : '';
+      notify(`Signed in as ${displayName}${roleName}`);
       onAuthenticated();
     } catch (err: any) {
       notify(err.message, 'error');
@@ -172,8 +174,10 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
         method: 'POST',
         body: { email, password },
       });
-      setStoredToken(res.token);
-      notify(`Signed in as ${res.user.fullName} (${res.user.role})`);
+      setStoredToken(res?.token || null);
+      const displayName = res?.user?.fullName || res?.user?.email || 'User';
+      const roleName = res?.user?.role ? ` (${res.user.role})` : '';
+      notify(`Signed in as ${displayName}${roleName}`);
       onAuthenticated();
     } catch (err: any) {
       notify(err.message, 'error');
