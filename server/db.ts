@@ -4,9 +4,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { hashPassword, normalizeFlatNumber } from './security.ts';
 
-const DB_PATH = process.env.SQLITE_DB_PATH || path.join(process.cwd(), 'data', 'society_saas.db');
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-fs.mkdirSync(path.join(process.cwd(), 'data', 'uploads'), { recursive: true });
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const defaultDbPath = isServerless ? path.join('/tmp', 'society_saas.db') : path.join(process.cwd(), 'data', 'society_saas.db');
+const DB_PATH = process.env.SQLITE_DB_PATH || defaultDbPath;
+try {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+} catch {
+  // Ignore mkdir error if directory already exists or is read-only
+}
+
+const defaultUploadsDir = isServerless ? path.join('/tmp', 'uploads') : path.join(process.cwd(), 'data', 'uploads');
+try {
+  fs.mkdirSync(defaultUploadsDir, { recursive: true });
+} catch {
+  // Ignore mkdir error
+}
 
 export const db = new DatabaseSync(DB_PATH);
 
@@ -205,6 +217,9 @@ export function initDatabase(): void {
       area_sqft REAL NOT NULL DEFAULT 1200,
       status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('PENDING', 'ACTIVE', 'BLOCKED', 'ARCHIVED')),
       primary_member_id TEXT NULL,
+      opening_balance REAL NOT NULL DEFAULT 0,
+      opening_balance_notes TEXT NULL,
+      opening_balance_date TEXT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -274,7 +289,7 @@ export function initDatabase(): void {
       billing_month INTEGER NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
       billing_year INTEGER NOT NULL CHECK (billing_year BETWEEN 2020 AND 2100),
       bill_type TEXT NOT NULL DEFAULT 'REGULAR'
-        CHECK (bill_type IN ('REGULAR', 'SUPPLEMENTARY', 'ADJUSTMENT')),
+        CHECK (bill_type IN ('REGULAR', 'SUPPLEMENTARY', 'ADJUSTMENT', 'OPENING_BALANCE')),
       adjustment_reason TEXT NULL,
       status TEXT NOT NULL DEFAULT 'UNPAID'
         CHECK (status IN ('DRAFT', 'PUBLISHED', 'UNPAID', 'PAYMENT_SUBMITTED', 'PENDING_VERIFICATION', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED')),
@@ -652,6 +667,9 @@ export function initDatabase(): void {
     "ALTER TABLE platform_settings ADD COLUMN bank_name TEXT NULL",
     "ALTER TABLE platform_settings ADD COLUMN bank_account_number TEXT NULL",
     "ALTER TABLE platform_settings ADD COLUMN bank_ifsc TEXT NULL",
+    "ALTER TABLE households ADD COLUMN opening_balance REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE households ADD COLUMN opening_balance_notes TEXT NULL",
+    "ALTER TABLE households ADD COLUMN opening_balance_date TEXT NULL",
   ];
   for (const sql of safeAlterColumns) {
     try {
@@ -659,6 +677,53 @@ export function initDatabase(): void {
     } catch {
       // Column already exists
     }
+  }
+
+  // Migrate member_bills if CHECK constraint lacks 'OPENING_BALANCE'
+  try {
+    const billTableSql = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='member_bills'")
+      .get() as { sql?: string } | undefined;
+    if (billTableSql?.sql && !billTableSql.sql.includes('OPENING_BALANCE')) {
+      db.exec('PRAGMA foreign_keys = OFF;');
+      db.exec(`
+        CREATE TABLE member_bills_temp_migration (
+          id TEXT PRIMARY KEY,
+          society_id TEXT NOT NULL REFERENCES societies(id) ON DELETE CASCADE,
+          household_id TEXT NOT NULL REFERENCES households(id) ON DELETE RESTRICT,
+          member_id TEXT NULL REFERENCES society_members(id) ON DELETE SET NULL,
+          bill_number TEXT NOT NULL UNIQUE,
+          billing_month INTEGER NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+          billing_year INTEGER NOT NULL CHECK (billing_year BETWEEN 2020 AND 2100),
+          bill_type TEXT NOT NULL DEFAULT 'REGULAR'
+            CHECK (bill_type IN ('REGULAR', 'SUPPLEMENTARY', 'ADJUSTMENT', 'OPENING_BALANCE')),
+          adjustment_reason TEXT NULL,
+          status TEXT NOT NULL DEFAULT 'UNPAID'
+            CHECK (status IN ('DRAFT', 'PUBLISHED', 'UNPAID', 'PAYMENT_SUBMITTED', 'PENDING_VERIFICATION', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED')),
+          subtotal_amount REAL NOT NULL DEFAULT 0,
+          previous_balance REAL NOT NULL DEFAULT 0,
+          penalty_amount REAL NOT NULL DEFAULT 0,
+          credit_amount REAL NOT NULL DEFAULT 0,
+          total_amount REAL NOT NULL DEFAULT 0,
+          paid_amount REAL NOT NULL DEFAULT 0,
+          balance_amount REAL NOT NULL DEFAULT 0,
+          due_date TEXT NOT NULL,
+          issued_at TEXT NULL,
+          created_by TEXT NULL REFERENCES users(id),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO member_bills_temp_migration SELECT * FROM member_bills;
+        DROP TABLE member_bills;
+        ALTER TABLE member_bills_temp_migration RENAME TO member_bills;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_regular_bill_per_household_period
+          ON member_bills (society_id, household_id, billing_month, billing_year)
+          WHERE bill_type = 'REGULAR' AND status != 'CANCELLED';
+      `);
+      db.exec('PRAGMA foreign_keys = ON;');
+    }
+  } catch (migrationErr) {
+    console.error('[Migration Warning] Failed to update member_bills check constraint:', migrationErr);
   }
 }
 

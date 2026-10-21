@@ -10,7 +10,7 @@ const deployZip = path.join(root, 'hostinger-societyos-mysql-deploy.zip');
 if (fs.existsSync(deployZip)) fs.unlinkSync(deployZip);
 
 execSync(
-  `zip -r "${deployZip}" dist server database scripts src index.html vite.config.ts tsconfig.json app.js package.json package-lock.json .env hostinger.env -x "*/.DS_Store" "*node_modules*"`,
+  `zip -r "${deployZip}" dist server api database scripts src index.html vite.config.ts tsconfig.json vercel.json app.js package.json package-lock.json .env hostinger.env -x "*/.DS_Store" "*node_modules*"`,
   { cwd: root, stdio: 'inherit' }
 );
 

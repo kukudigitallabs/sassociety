@@ -12,6 +12,8 @@ export function setStoredToken(token: string | null): void {
   }
 }
 
+const API_BASE = ((import.meta as any).env?.VITE_API_URL || '').replace(/\/+$/, '');
+
 export async function apiFetch<T = any>(
   pathname: string,
   options: { method?: string; body?: any; token?: string | null } = {}
@@ -23,7 +25,12 @@ export async function apiFetch<T = any>(
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  const res = await fetch(pathname, {
+  const cleanBase = API_BASE ? API_BASE.replace(/\/+$/, '') : '';
+  const url = pathname.startsWith('http://') || pathname.startsWith('https://')
+    ? pathname
+    : `${cleanBase}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+
+  const res = await fetch(url, {
     method: options.method || 'GET',
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,

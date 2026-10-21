@@ -126,6 +126,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     | 'ADD_MEMBER'
     | 'ADD_BLOCK'
     | 'TRANSFER_FLAT'
+    | 'UPDATE_OPENING_BALANCE'
     | 'ADD_CHARGE_CAT'
     | 'GENERATE_BILLS'
     | 'SUPPLEMENTARY_BILL'
@@ -141,6 +142,13 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
   const [transferHousehold, setTransferHousehold] = useState<any | null>(null);
+  const [selectedHouseholdForOpBal, setSelectedHouseholdForOpBal] = useState<{
+    id: string;
+    flat_number: string;
+    opening_balance?: number;
+    opening_balance_notes?: string;
+  } | null>(null);
+  const [opBalForm, setOpBalForm] = useState({ openingBalance: '', notes: '' });
 
   // Forms
   const [newMemberForm, setNewMemberForm] = useState({
@@ -157,6 +165,8 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     enrolmentMode: 'NEW_HOUSEHOLD',
     existingHouseholdId: '',
     relationshipToPrimary: 'SPOUSE',
+    openingBalance: '',
+    openingBalanceNotes: '',
   });
   const [newBlockName, setNewBlockName] = useState('');
   const [transferForm, setTransferForm] = useState({ newFlatNumber: '', newBlockName: '', reason: '' });
@@ -1242,6 +1252,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       <th>Resident Name</th>
                       <th>Role / Household Link</th>
                       <th>Contact</th>
+                      <th>Opening Bal / Dues</th>
                       <th>Approval</th>
                       <th>Status</th>
                       {can('manage_members') && <th>Actions</th>}
@@ -1261,6 +1272,22 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         <td>
                           <div>{m.email}</div>
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.phone}</div>
+                        </td>
+                        <td>
+                          {Boolean(m.is_primary_member) ? (
+                            <div>
+                              <div><strong>{formatCurrency(m.opening_balance || 0)}</strong></div>
+                              {Number(m.opening_balance_dues || 0) > 0 ? (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--danger)', fontWeight: 600 }}>
+                                  Due: {formatCurrency(m.opening_balance_dues)}
+                                </div>
+                              ) : Number(m.opening_balance || 0) > 0 ? (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--success)' }}>Paid</div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>—</span>
+                          )}
                         </td>
                         <td>
                           <span className={`badge ${m.approval_status === 'APPROVED' ? 'badge-success' : 'badge-warning'}`}>
@@ -1314,18 +1341,40 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                                 </button>
                               )}
                               {Boolean(m.is_primary_member) && (
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary btn-sm"
-                                  onClick={() => {
-                                    setTransferHousehold({ id: m.household_id, flat_number: m.normalized_flat_number, block_name: m.block_name });
-                                    setTransferForm({ newFlatNumber: m.normalized_flat_number, newBlockName: m.block_name, reason: '' });
-                                    setModal('TRANSFER_FLAT');
-                                  }}
-                                  title="Logged Flat Correction / Transfer"
-                                >
-                                  <ArrowRightLeft size={13} /> Transfer Flat
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => {
+                                      setSelectedHouseholdForOpBal({
+                                        id: m.household_id,
+                                        flat_number: m.normalized_flat_number,
+                                        opening_balance: m.opening_balance || 0,
+                                        opening_balance_notes: m.opening_balance_notes || '',
+                                      });
+                                      setOpBalForm({
+                                        openingBalance: String(m.opening_balance || 0),
+                                        notes: m.opening_balance_notes || '',
+                                      });
+                                      setModal('UPDATE_OPENING_BALANCE');
+                                    }}
+                                    title="Configure or adjust opening balance"
+                                  >
+                                    ₹ Opening Bal
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => {
+                                      setTransferHousehold({ id: m.household_id, flat_number: m.normalized_flat_number, block_name: m.block_name });
+                                      setTransferForm({ newFlatNumber: m.normalized_flat_number, newBlockName: m.block_name, reason: '' });
+                                      setModal('TRANSFER_FLAT');
+                                    }}
+                                    title="Logged Flat Correction / Transfer"
+                                  >
+                                    <ArrowRightLeft size={13} /> Transfer Flat
+                                  </button>
+                                </>
                               )}
                             </div>
                           </td>
@@ -1451,7 +1500,13 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                             <strong>{b.flat_number}</strong> — {b.member_name || 'Household'}
                           </td>
                           <td>
-                            {b.billing_month}/{b.billing_year} • <span className="badge badge-info">{b.bill_type}</span>
+                            {b.bill_type === 'OPENING_BALANCE' || b.bill_number?.startsWith('OP-BAL-') ? (
+                              <span className="badge" style={{ backgroundColor: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', fontWeight: 600 }}>
+                                OPENING BALANCE
+                              </span>
+                            ) : (
+                              <>{b.billing_month}/{b.billing_year} • <span className="badge badge-info">{b.bill_type}</span></>
+                            )}
                           </td>
                           <td>{formatCurrency(b.total_amount)}</td>
                           <td>
@@ -3364,6 +3419,23 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                     body: newMemberForm,
                   });
                   notify(res.message);
+                  setNewMemberForm({
+                    fullName: '',
+                    email: '',
+                    phone: '',
+                    password: 'Member@123',
+                    flatNumber: '',
+                    blockName: 'Block A',
+                    floorNumber: '1',
+                    areaSqft: 1400,
+                    ownershipType: 'OWNER',
+                    emergencyContact: '',
+                    enrolmentMode: 'NEW_HOUSEHOLD',
+                    existingHouseholdId: '',
+                    relationshipToPrimary: 'SPOUSE',
+                    openingBalance: '',
+                    openingBalanceNotes: '',
+                  });
                   setModal('NONE');
                   refreshCurrentTab();
                 } catch (err: any) {
@@ -3427,9 +3499,105 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   <input type="tel" required className="input" value={newMemberForm.phone} onChange={(e) => setNewMemberForm({ ...newMemberForm, phone: e.target.value })} />
                 </div>
               </div>
+              {newMemberForm.enrolmentMode === 'NEW_HOUSEHOLD' && (
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label>Opening Balance (₹) (Optional)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="input"
+                      placeholder="e.g. 2500"
+                      value={newMemberForm.openingBalance}
+                      onChange={(e) => setNewMemberForm({ ...newMemberForm, openingBalance: e.target.value })}
+                    />
+                    <small style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>
+                      Set prior dues/balance to be payable by resident.
+                    </small>
+                  </div>
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <label>Opening Balance Remarks / Reason</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="e.g. Carry-forward outstanding dues from previous ledger"
+                      value={newMemberForm.openingBalanceNotes}
+                      onChange={(e) => setNewMemberForm({ ...newMemberForm, openingBalanceNotes: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Save Member</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: UPDATE OPENING BALANCE */}
+      {modal === 'UPDATE_OPENING_BALANCE' && selectedHouseholdForOpBal && (
+        <div className="modal-backdrop" onClick={() => setModal('NONE')}>
+          <div className="modal-card" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+            <h3>Manage Resident Opening Balance</h3>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.2rem', marginBottom: '1rem' }}>
+              Flat <strong>{selectedHouseholdForOpBal.flat_number}</strong> • Add or adjust prior outstanding dues to be payable by the resident along with monthly dues.
+            </p>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                try {
+                  const res = await apiFetch(`/api/society/households/${selectedHouseholdForOpBal.id}/opening-balance`, {
+                    method: 'POST',
+                    body: {
+                      openingBalance: Number(opBalForm.openingBalance || 0),
+                      notes: opBalForm.notes,
+                    },
+                  });
+                  notify(res.message || 'Opening balance updated.');
+                  setModal('NONE');
+                  refreshCurrentTab();
+                } catch (err: any) {
+                  notify(err.message, 'error');
+                }
+              }}
+              style={{ display: 'grid', gap: '0.9rem' }}
+            >
+              <div className="form-group">
+                <label>Opening Balance Amount (₹) *</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  className="input"
+                  placeholder="e.g. 5000"
+                  value={opBalForm.openingBalance}
+                  onChange={(e) => setOpBalForm({ ...opBalForm, openingBalance: e.target.value })}
+                />
+                <small style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>
+                  An Opening Balance invoice will be automatically synchronized for resident checkout and cashier receipting.
+                </small>
+              </div>
+              <div className="form-group">
+                <label>Notes / Reason for Opening Balance</label>
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="e.g. Prior outstanding maintenance dues before system migration"
+                  value={opBalForm.notes}
+                  onChange={(e) => setOpBalForm({ ...opBalForm, notes: e.target.value })}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Save Opening Balance
+                </button>
               </div>
             </form>
           </div>

@@ -472,4 +472,127 @@ describe('SocietyOS SaaS — Comprehensive Acceptance Criteria Suite (Section 22
     assert.equal(rep.data.summary.netSurplusOrDeficit, 2000);
     assert.equal(rep.data.summary.bankBalance, 2000);
   });
+
+  it('AC 14: Resident opening balance configuration by Admin & payable by resident with other dues', async () => {
+    // 1. Admin enrols a new member with an initial opening balance of ₹3,500
+    const enrolRes = await api('/api/society/members', {
+      method: 'POST',
+      token: societyAToken,
+      body: {
+        fullName: 'Manpreet Kaur',
+        email: 'manpreet@shivalik.com',
+        phone: '+91-98777-20202',
+        password: 'Password@123',
+        flatNumber: 'B-202',
+        blockName: 'Block B',
+        floorNumber: '2',
+        areaSqft: 1500,
+        ownershipType: 'OWNER',
+        openingBalance: 3500,
+        openingBalanceNotes: 'Prior arrears carried forward from old society ledger',
+      },
+    });
+    assert.equal(enrolRes.status, 201);
+    const { householdId, memberId } = enrolRes.data;
+    assert.ok(householdId);
+    assert.ok(memberId);
+
+    // 2. Query society members: verify opening_balance and opening_balance_dues
+    const membersRes = await api('/api/society/members?search=B-202', { token: societyAToken });
+    assert.equal(membersRes.status, 200);
+    const memberRow = membersRes.data.members.find((m: any) => m.id === memberId);
+    assert.ok(memberRow);
+    assert.equal(Number(memberRow.opening_balance), 3500);
+    assert.equal(Number(memberRow.opening_balance_dues), 3500);
+
+    // 3. Member logs in
+    const memberLogin = await api('/api/auth/login', {
+      method: 'POST',
+      body: { email: 'manpreet@shivalik.com', password: 'Password@123' },
+    });
+    assert.equal(memberLogin.status, 200);
+    assert.equal(memberLogin.data.user.role, 'MEMBER');
+    const memberToken = memberLogin.data.token;
+
+    // 4. Member checks dashboard: Opening balance must be listed in outstanding balance & bills
+    const dashRes = await api('/api/member/dashboard', { token: memberToken });
+    assert.equal(dashRes.status, 200);
+    assert.equal(Number(dashRes.data.openingBalance), 3500);
+    assert.equal(Number(dashRes.data.openingBalanceDues), 3500);
+    assert.equal(Number(dashRes.data.totalOutstanding), 3500);
+
+    const opBalBill = dashRes.data.bills.find(
+      (b: any) => b.bill_type === 'OPENING_BALANCE' || b.bill_number?.startsWith('OP-BAL-')
+    );
+    assert.ok(opBalBill, 'Opening balance bill must exist in member bills');
+    assert.equal(Number(opBalBill.total_amount), 3500);
+    assert.equal(Number(opBalBill.balance_amount), 3500);
+    assert.equal(opBalBill.status, 'UNPAID');
+
+    // 5. Admin updates opening balance on the household to ₹4,000 with updated note
+    const updateOpBal = await api(`/api/society/households/${householdId}/opening-balance`, {
+      method: 'POST',
+      token: societyAToken,
+      body: {
+        openingBalance: 4000,
+        notes: 'Adjusted: Added penalty fee from 2025 ledger',
+      },
+    });
+    assert.equal(updateOpBal.status, 200);
+
+    // Member dashboard reflects updated opening balance dues
+    const dashRes2 = await api('/api/member/dashboard', { token: memberToken });
+    assert.equal(Number(dashRes2.data.openingBalance), 4000);
+    assert.equal(Number(dashRes2.data.openingBalanceDues), 4000);
+    assert.equal(Number(dashRes2.data.totalOutstanding), 4000);
+
+    // 6. Society generates regular monthly maintenance bill for Flat B-202 (Month 11, Year 2026)
+    const catsRes = await api('/api/society/charge-categories', { token: societyAToken });
+    const regularCat = catsRes.data.categories[0];
+    const genRes = await api('/api/society/bills/generate', {
+      method: 'POST',
+      token: societyAToken,
+      body: {
+        billingMonth: 11,
+        billingYear: 2026,
+        householdId,
+        chargeCategoryIds: [regularCat.id],
+      },
+    });
+    assert.equal(genRes.status, 201);
+
+    // Resident dashboard now includes both Opening Balance dues + regular bill dues
+    const dashRes3 = await api('/api/member/dashboard', { token: memberToken });
+    assert.equal(Number(dashRes3.data.openingBalanceDues), 4000);
+    assert.equal(Number(dashRes3.data.otherDues), Number(regularCat.default_amount));
+    assert.equal(Number(dashRes3.data.totalOutstanding), 4000 + Number(regularCat.default_amount));
+
+    // 7. Member submits payment against Opening Balance bill
+    const payRes = await api('/api/member/payments', {
+      method: 'POST',
+      token: memberToken,
+      body: {
+        billIds: [opBalBill.id],
+        amount: 4000,
+        paymentDate: '2026-10-21',
+        paymentMethod: 'UPI',
+        referenceNumber: 'UPI-OPBAL-99182377',
+      },
+    });
+    assert.equal(payRes.status, 201);
+    const payId = payRes.data.paymentId;
+
+    // Admin confirms the payment
+    const confirmRes = await api(`/api/society/payments/${payId}/verify`, {
+      method: 'POST',
+      token: societyAToken,
+      body: { decision: 'CONFIRM', notes: 'Verified bank transfer for opening balance' },
+    });
+    assert.equal(confirmRes.status, 200);
+
+    // Opening balance dues should now be 0, while regular bill remains payable
+    const dashRes4 = await api('/api/member/dashboard', { token: memberToken });
+    assert.equal(Number(dashRes4.data.openingBalanceDues), 0);
+    assert.equal(Number(dashRes4.data.totalOutstanding), Number(regularCat.default_amount));
+  });
 });

@@ -162,7 +162,7 @@ function hasSocietyAccess(
 export async function handleApiRequest(ctx: RequestContext): Promise<void> {
   const { res, url, method, body, auth, req } = ctx;
   const pathname = url.pathname;
-  const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const clientIp = (req.headers?.['x-forwarded-for'] as string) || req.socket?.remoteAddress || '127.0.0.1';
 
   try {
     // ========================================================================
@@ -192,8 +192,8 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
         return sendJson(res, 400, { error: 'File exceeds maximum allowed size of 5 MB.' });
       }
       const ext = path.extname(String(fileName)).replace(/[^a-zA-Z0-9.]/g, '') || '.png';
-      const safeName = `${Date.now()}-${uuid().slice(0, 8)}${ext}`;
-      const uploadDir = path.join(process.cwd(), 'data', 'uploads');
+      const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+      const uploadDir = isServerless ? path.join('/tmp', 'uploads') : path.join(process.cwd(), 'data', 'uploads');
       fs.mkdirSync(uploadDir, { recursive: true });
       fs.writeFileSync(path.join(uploadDir, safeName), buffer);
       return sendJson(res, 201, { url: `/uploads/${safeName}`, fileName: safeName, size: buffer.byteLength });
@@ -2167,13 +2167,182 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
       }
 
       // 5.2 MEMBERS, HOUSEHOLDS & BLOCKS (Section 5)
+      function syncHouseholdOpeningBalance(
+        socId: string,
+        hhId: string,
+        openingBalance: number,
+        notes?: string,
+        creatorUserId?: string
+      ): { billId?: string; balanceAmount: number } {
+        const hh = db
+          .prepare('SELECT * FROM households WHERE id = ? AND society_id = ?')
+          .get(hhId, socId) as Record<string, any> | undefined;
+        if (!hh) throw new Error('Household not found.');
+
+        const opBal = Math.max(0, Number(Number(openingBalance || 0).toFixed(2)));
+        const cleanNotes = notes ? String(notes).trim() : null;
+
+        db.prepare(`
+          UPDATE households
+          SET opening_balance = ?,
+              opening_balance_notes = ?,
+              opening_balance_date = COALESCE(opening_balance_date, datetime('now')),
+              updated_at = datetime('now')
+          WHERE id = ? AND society_id = ?
+        `).run(opBal, cleanNotes, hhId, socId);
+
+        // Ensure 'OPENING_BALANCE' charge category exists for the society
+        let cat = db
+          .prepare("SELECT * FROM charge_categories WHERE society_id = ? AND code = 'OPENING_BALANCE'")
+          .get(socId) as Record<string, any> | undefined;
+
+        if (!cat) {
+          const catId = uuid();
+          db.prepare(`
+            INSERT INTO charge_categories (
+              id, society_id, name, code, description, default_amount, billing_frequency, applicable_flats, due_day, is_single_charge_per_period, is_active
+            ) VALUES (?, ?, 'Opening Balance Dues', 'OPENING_BALANCE', 'Prior outstanding ledger balance before system onboarding', 0, 'ONE_TIME', 'ALL', 10, 1, 1)
+          `).run(catId, socId);
+          cat = { id: catId, name: 'Opening Balance Dues', code: 'OPENING_BALANCE' };
+        }
+
+        // Check if an Opening Balance bill already exists for this household
+        const existingBill = db.prepare(`
+          SELECT * FROM member_bills
+          WHERE society_id = ? AND household_id = ?
+            AND (bill_type = 'OPENING_BALANCE' OR (bill_type = 'ADJUSTMENT' AND adjustment_reason = 'OPENING_BALANCE') OR bill_number LIKE 'OP-BAL-%')
+            AND status != 'CANCELLED'
+          LIMIT 1
+        `).get(socId, hhId) as Record<string, any> | undefined;
+
+        if (opBal > 0) {
+          if (existingBill) {
+            const paid = Number(existingBill.paid_amount || 0);
+            const newBal = Math.max(0, Number((opBal - paid).toFixed(2)));
+            const newStatus = newBal === 0 ? 'PAID' : (paid > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
+
+            db.prepare(`
+              UPDATE member_bills
+              SET subtotal_amount = ?,
+                  total_amount = ?,
+                  balance_amount = ?,
+                  status = ?,
+                  adjustment_reason = 'OPENING_BALANCE',
+                  updated_at = datetime('now')
+              WHERE id = ?
+            `).run(opBal, opBal, newBal, newStatus, existingBill.id);
+
+            db.prepare(`
+              UPDATE bill_items
+              SET amount = ?, description = ?
+              WHERE bill_id = ?
+            `).run(opBal, cleanNotes || 'Prior Outstanding Dues / Ledger Opening Balance', existingBill.id);
+
+            return { billId: existingBill.id, balanceAmount: newBal };
+          } else {
+            const now = new Date();
+            const m = now.getMonth() + 1;
+            const y = now.getFullYear();
+            const billId = uuid();
+            const billNumber = `OP-BAL-${hh.normalized_flat_number.replace(/[^A-Z0-9]/g, '')}-${billId.slice(0, 4).toUpperCase()}`;
+            const dueDate = `${y}-${String(m).padStart(2, '0')}-28`;
+
+            let insertBillType = 'OPENING_BALANCE';
+            try {
+              db.prepare(`
+                INSERT INTO member_bills (
+                  id, society_id, household_id, member_id, bill_number, billing_month, billing_year,
+                  bill_type, adjustment_reason, status, subtotal_amount, previous_balance, penalty_amount,
+                  credit_amount, total_amount, paid_amount, balance_amount, due_date, issued_at, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPENING_BALANCE', 'UNPAID', ?, 0, 0, 0, ?, 0, ?, ?, datetime('now'), ?)
+              `).run(
+                billId,
+                socId,
+                hh.id,
+                hh.primary_member_id,
+                billNumber,
+                m,
+                y,
+                insertBillType,
+                opBal,
+                opBal,
+                opBal,
+                dueDate,
+                creatorUserId ?? null
+              );
+            } catch (insErr: any) {
+              if (String(insErr?.message || '').includes('CHECK constraint failed')) {
+                insertBillType = 'ADJUSTMENT';
+                db.prepare(`
+                  INSERT INTO member_bills (
+                    id, society_id, household_id, member_id, bill_number, billing_month, billing_year,
+                    bill_type, adjustment_reason, status, subtotal_amount, previous_balance, penalty_amount,
+                    credit_amount, total_amount, paid_amount, balance_amount, due_date, issued_at, created_by
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPENING_BALANCE', 'UNPAID', ?, 0, 0, 0, ?, 0, ?, ?, datetime('now'), ?)
+                `).run(
+                  billId,
+                  socId,
+                  hh.id,
+                  hh.primary_member_id,
+                  billNumber,
+                  m,
+                  y,
+                  insertBillType,
+                  opBal,
+                  opBal,
+                  opBal,
+                  dueDate,
+                  creatorUserId ?? null
+                );
+              } else {
+                throw insErr;
+              }
+            }
+
+            db.prepare(`
+              INSERT INTO bill_items (
+                id, society_id, bill_id, household_id, charge_category_id, category_name,
+                billing_month, billing_year, description, amount, is_adjustment
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            `).run(
+              uuid(),
+              socId,
+              billId,
+              hh.id,
+              cat.id,
+              cat.name,
+              m,
+              y,
+              cleanNotes || 'Prior Outstanding Dues / Ledger Opening Balance',
+              opBal
+            );
+
+            return { billId, balanceAmount: opBal };
+          }
+        } else {
+          // If opBal is 0 and an unpaid opening balance bill exists with 0 paid, cancel it
+          if (existingBill && Number(existingBill.paid_amount || 0) === 0) {
+            db.prepare("UPDATE member_bills SET status = 'CANCELLED', balance_amount = 0, updated_at = datetime('now') WHERE id = ?").run(existingBill.id);
+          }
+          return { balanceAmount: 0 };
+        }
+      }
+
       if (pathname === '/api/society/members' && method === 'GET') {
         const search = (url.searchParams.get('search') || '').trim().toLowerCase();
         const status = url.searchParams.get('status') || '';
         const block = url.searchParams.get('block') || '';
 
         const members = db.prepare(`
-          SELECT sm.*, h.flat_number, h.normalized_flat_number, h.block_name, h.floor_number, h.occupancy_type, h.area_sqft
+          SELECT sm.*, h.flat_number, h.normalized_flat_number, h.block_name, h.floor_number, h.occupancy_type, h.area_sqft,
+                 h.opening_balance, h.opening_balance_notes, h.opening_balance_date,
+                 COALESCE((
+                   SELECT SUM(mb.balance_amount)
+                   FROM member_bills mb
+                   WHERE mb.household_id = h.id
+                     AND (mb.bill_type = 'OPENING_BALANCE' OR (mb.bill_type = 'ADJUSTMENT' AND mb.adjustment_reason = 'OPENING_BALANCE') OR mb.bill_number LIKE 'OP-BAL-%')
+                     AND mb.status NOT IN ('PAID', 'CANCELLED', 'DRAFT')
+                 ), 0) as opening_balance_dues
           FROM society_members sm
           JOIN households h ON h.id = sm.household_id
           WHERE sm.society_id = ?
@@ -2191,7 +2360,17 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
         });
 
         const households = db.prepare(`
-          SELECT * FROM households WHERE society_id = ? AND status != 'ARCHIVED' ORDER BY normalized_flat_number ASC
+          SELECT h.*,
+                 COALESCE((
+                   SELECT SUM(mb.balance_amount)
+                   FROM member_bills mb
+                   WHERE mb.household_id = h.id
+                     AND (mb.bill_type = 'OPENING_BALANCE' OR (mb.bill_type = 'ADJUSTMENT' AND mb.adjustment_reason = 'OPENING_BALANCE') OR mb.bill_number LIKE 'OP-BAL-%')
+                     AND mb.status NOT IN ('PAID', 'CANCELLED', 'DRAFT')
+                 ), 0) as opening_balance_dues
+          FROM households h
+          WHERE h.society_id = ? AND h.status != 'ARCHIVED'
+          ORDER BY h.normalized_flat_number ASC
         `).all(societyId);
 
         const blocks = db.prepare('SELECT * FROM apartment_blocks WHERE society_id = ? ORDER BY name ASC').all(societyId);
@@ -2226,6 +2405,8 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           enrolmentMode = 'NEW_HOUSEHOLD', // 'NEW_HOUSEHOLD' or 'FAMILY_MEMBER'
           existingHouseholdId = null,
           relationshipToPrimary = 'PRIMARY',
+          openingBalance = 0,
+          openingBalanceNotes = '',
         } = body;
 
         if (!fullName || !email || !phone || !flatNumber) {
@@ -2330,6 +2511,11 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
 
           if (isPrimary) {
             db.prepare('UPDATE households SET primary_member_id = ? WHERE id = ?').run(memberId, householdId);
+          }
+
+          const opBalNum = Number(openingBalance || 0);
+          if (opBalNum > 0 || (openingBalanceNotes && String(openingBalanceNotes).trim())) {
+            syncHouseholdOpeningBalance(societyId, householdId, opBalNum, openingBalanceNotes, auth?.userId);
           }
 
           logAudit({
@@ -2443,6 +2629,37 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           details: { previousFlat: hh.normalized_flat_number, newFlat: normalizedNew, reason },
         });
         return sendJson(res, 200, { message: `Household updated to ${normalizedNew} and logged in audit trail.` });
+      }
+
+      // Opening balance management for household (Section 5)
+      const openingBalMatch = pathname.match(/^\/api\/society\/households\/([^/]+)\/opening-balance$/);
+      if (openingBalMatch && method === 'POST') {
+        const hhId = openingBalMatch[1];
+        const hh = db.prepare('SELECT * FROM households WHERE id = ? AND society_id = ?').get(hhId, societyId) as Record<string, any> | undefined;
+        if (!hh) return sendJson(res, 404, { error: 'Household not found.' });
+
+        const { openingBalance, notes } = body;
+        if (openingBalance === undefined || openingBalance === null || isNaN(Number(openingBalance)) || Number(openingBalance) < 0) {
+          return sendJson(res, 400, { error: 'A valid non-negative opening balance amount is required.' });
+        }
+
+        const result = syncHouseholdOpeningBalance(societyId, hhId, Number(openingBalance), notes, auth?.userId);
+
+        logAudit({
+          societyId,
+          actorUserId: auth?.userId,
+          actorRole: auth?.role || 'SOCIETY_ADMIN',
+          action: 'HOUSEHOLD_OPENING_BALANCE_UPDATED',
+          entityType: 'HOUSEHOLD',
+          entityId: hhId,
+          details: { flatNumber: hh.normalized_flat_number, openingBalance: Number(openingBalance), notes },
+        });
+
+        return sendJson(res, 200, {
+          success: true,
+          message: `Opening balance for Flat ${hh.normalized_flat_number} updated to ₹${Number(openingBalance).toFixed(2)}.`,
+          ...result,
+        });
       }
 
       // 5.3 CHARGE CATEGORIES & MONTHLY BILLING (Section 6)
@@ -2660,6 +2877,7 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
               SELECT COALESCE(SUM(balance_amount), 0) as prev
               FROM member_bills
               WHERE society_id = ? AND household_id = ? AND status NOT IN ('PAID', 'CANCELLED', 'DRAFT')
+                AND bill_type = 'REGULAR'
                 AND (billing_year < ? OR (billing_year = ? AND billing_month < ?))
             `).get(societyId, hh.id, y, y, m) as { prev: number };
 
@@ -4200,7 +4418,8 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
       }
       const societyId = auth.societyId;
       const member = db.prepare(`
-        SELECT sm.*, h.flat_number, h.normalized_flat_number, h.block_name, h.floor_number, h.occupancy_type, h.area_sqft
+        SELECT sm.*, h.flat_number, h.normalized_flat_number, h.block_name, h.floor_number, h.occupancy_type, h.area_sqft,
+               h.opening_balance, h.opening_balance_notes, h.opening_balance_date
         FROM society_members sm
         JOIN households h ON h.id = sm.household_id
         WHERE sm.user_id = ? AND sm.society_id = ?
@@ -4303,12 +4522,27 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           .filter((b) => b.status !== 'PAID')
           .reduce((sum, b) => sum + Number(b.balance_amount || 0), 0);
 
+        const openingBalanceDues = enrichedBills
+          .filter(
+            (b) =>
+              (b.bill_type === 'OPENING_BALANCE' ||
+                b.bill_number?.startsWith('OP-BAL-') ||
+                (b.bill_type === 'ADJUSTMENT' && b.adjustment_reason === 'OPENING_BALANCE')) &&
+              b.status !== 'PAID'
+          )
+          .reduce((sum, b) => sum + Number(b.balance_amount || 0), 0);
+
+        const otherDues = Math.max(0, Number((totalOutstanding - openingBalanceDues).toFixed(2)));
+
         return sendJson(res, 200, {
           member,
           householdMembers,
           society,
           settings,
           totalOutstanding,
+          openingBalance: Number(member?.opening_balance || 0),
+          openingBalanceDues,
+          otherDues,
           bills: enrichedBills,
           payments,
           receipts,

@@ -301,7 +301,15 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                   <span className="kpi-value" style={{ color: Number(data?.totalOutstanding) > 0 ? 'var(--danger)' : 'var(--success)' }}>
                     {formatCurrency(data?.totalOutstanding)}
                   </span>
-                  <span className="kpi-sub">Flat {member.flat_number} ({member.block_name})</span>
+                  <span className="kpi-sub">
+                    {Number(data?.openingBalanceDues || 0) > 0 ? (
+                      <span style={{ color: 'var(--primary)', fontWeight: 600 }}>
+                        Includes Opening Balance: {formatCurrency(data?.openingBalanceDues)}
+                      </span>
+                    ) : (
+                      <>Flat {member.flat_number} ({member.block_name})</>
+                    )}
+                  </span>
                 </div>
                 <div className="kpi-card">
                   <span className="kpi-label">Unpaid / Overdue Bills</span>
@@ -331,6 +339,11 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
                         Pay via UPI ({settings.upi_id || 'society@upi'}), Google Pay, Paytm, Razorpay, or Bank Transfer and submit your reference for verification.
                       </p>
+                      {Number(data?.openingBalanceDues || 0) > 0 && (
+                        <div style={{ marginTop: '0.35rem', fontSize: '0.82rem', color: 'var(--primary)', fontWeight: 600 }}>
+                          Breakdown: Opening Balance: {formatCurrency(data.openingBalanceDues)} + Other Maintenance Dues: {formatCurrency(data.otherDues || 0)}
+                        </div>
+                      )}
                       {(pendingVerifications.length > 0 || unpaidBills.some((b) => b.status === 'PENDING_VERIFICATION')) && (
                         <div style={{ marginTop: '0.45rem', fontSize: '0.82rem', color: 'var(--warning)', fontWeight: 700 }}>
                           Already payment made under verification, cannot make another payment till payment status is paid or unpaid.
@@ -467,11 +480,22 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                       {filteredBills.map((b: any) => (
                         <tr key={b.id}>
                           <td><strong>{b.bill_number}</strong></td>
-                          <td>{b.billing_month}/{b.billing_year} ({b.bill_type})</td>
+                          <td>
+                            {b.bill_type === 'OPENING_BALANCE' || b.bill_number?.startsWith('OP-BAL-') ? (
+                              <span className="badge" style={{ backgroundColor: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', fontWeight: 600 }}>
+                                OPENING BALANCE
+                              </span>
+                            ) : (
+                              <span>{b.billing_month}/{b.billing_year} ({b.bill_type})</span>
+                            )}
+                          </td>
                           <td>
                             {(b.items || []).map((it: any) => (
                               <div key={it.id} style={{ fontSize: '0.76rem' }}>
-                                {it.category_name}: {formatCurrency(it.amount)}
+                                <strong>{it.category_name}</strong>: {formatCurrency(it.amount)}
+                                {it.description && it.description !== it.category_name && (
+                                  <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>{it.description}</div>
+                                )}
                               </div>
                             ))}
                           </td>
