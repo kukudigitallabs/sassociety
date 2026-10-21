@@ -1,0 +1,17 @@
+{
+  "name": "society-management-saas",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "build": "cd .. && npm run build || true",
+    "start": "node app.js",
+    "start:prod": "NODE_ENV=production node app.js"
+  },
+  "dependencies": {
+    "esbuild": "^0.25.0",
+    "mysql2": "^3.24.6",
+    "razorpay": "^2.9.8"
+  }
+}

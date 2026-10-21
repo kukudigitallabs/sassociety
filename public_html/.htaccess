@@ -1,0 +1,26 @@
+# ============================================================================
+# SocietyOS — Hostinger Apache / LiteSpeed Configuration (.htaccess)
+# ============================================================================
+DirectoryIndex index.html index.php
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  RewriteRule ^index\.html$ - [L]
+
+  # Allow direct access to existing files (js, css, images, svg, etc.)
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Route all /api/* requests to api/index.php gateway (prevents HTML fallback)
+  RewriteCond %{REQUEST_URI} ^/api(/.*)?$ [NC]
+  RewriteRule ^api/(.*)$ api/index.php [QSA,L]
+  RewriteRule ^api$ api/index.php [QSA,L]
+
+  # Route all SPA pages to index.html
+  RewriteRule . /index.html [L]
+</IfModule>
+
+Options -Indexes
