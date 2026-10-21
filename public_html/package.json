@@ -3,25 +3,27 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "app.js",
+  "main": "server.js",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
     "dev": "node --watch-path=server server/index.ts",
-    "start": "node app.js",
-    "start:prod": "NODE_ENV=production node app.js",
+    "start": "node server.js",
+    "server": "node server.js",
+    "start:prod": "NODE_ENV=production node server.js",
     "build": "node scripts/build-all.mjs",
     "build:server": "node scripts/build-server.mjs",
     "generate:mysql": "node scripts/generate-mysql-bundle.ts",
     "test": "node --test tests/acceptance.test.ts"
   },
   "dependencies": {
-    "esbuild": "^0.25.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.25.0",
+    "express": "^5.3.0",
     "lucide-react": "^0.468.0",
     "mysql2": "^3.24.6",
     "razorpay": "^2.9.8",
