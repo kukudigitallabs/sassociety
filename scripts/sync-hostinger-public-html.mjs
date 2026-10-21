@@ -16,7 +16,18 @@ import path from 'node:path';
  * is populated and never throws 403 Forbidden!
  */
 
-const cwd = process.cwd();
+function findProjectRoot(startDir) {
+  let curr = startDir;
+  while (curr && curr !== path.dirname(curr)) {
+    if (fs.existsSync(path.join(curr, 'vite.config.ts')) && fs.existsSync(path.join(curr, 'server', 'index.ts'))) {
+      return curr;
+    }
+    curr = path.dirname(curr);
+  }
+  return startDir;
+}
+
+const cwd = findProjectRoot(process.cwd());
 
 // Find public_html candidate paths relative to this build execution
 const candidates = [

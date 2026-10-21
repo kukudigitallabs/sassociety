@@ -2,7 +2,18 @@ import esbuild from 'esbuild';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const root = process.cwd();
+function findProjectRoot(startDir) {
+  let curr = startDir;
+  while (curr && curr !== path.dirname(curr)) {
+    if (fs.existsSync(path.join(curr, 'vite.config.ts')) && fs.existsSync(path.join(curr, 'server', 'index.ts'))) {
+      return curr;
+    }
+    curr = path.dirname(curr);
+  }
+  return startDir;
+}
+
+const root = findProjectRoot(process.cwd());
 const outDir = path.join(root, 'dist-server');
 if (!fs.existsSync(outDir)) {
   fs.mkdirSync(outDir, { recursive: true });
