@@ -33,6 +33,7 @@ $jwtSecret = 'society-saas-super-secret-jwt-key-2026-production-grade';
 
 // Try loading overrides from .env if present
 $envCandidates = [
+    __DIR__ . '/.env',
     __DIR__ . '/../.env',
     __DIR__ . '/../hostinger.env',
     __DIR__ . '/../../hbuilds/current/.env',
@@ -175,21 +176,43 @@ function get_auth_token($secret) {
     return $payload;
 }
 
+$pdoError = null;
+
 function get_pdo($host, $port, $db, $user, $pass) {
     static $pdoInstance = null;
+    global $pdoError;
     if ($pdoInstance !== null) return $pdoInstance;
-    if (empty($db) || empty($user)) return null;
-    try {
-        $dsn = "mysql:host={$host};port={$port};dbname={$db};charset=utf8mb4";
-        $pdoInstance = new PDO($dsn, $user, $pass, [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT, // Silent mode prevents unhandled crash
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_TIMEOUT => 3,
-        ]);
-        return $pdoInstance;
-    } catch (\Throwable $e) {
+    if (empty($db) || empty($user)) {
+        $pdoError = "Missing database name or user in configuration";
         return null;
     }
+
+    $dsnCandidates = [
+        "mysql:host={$host};port={$port};dbname={$db};charset=utf8mb4",
+        "mysql:host=localhost;dbname={$db};charset=utf8mb4",
+        "mysql:host=127.0.0.1;port=3306;dbname={$db};charset=utf8mb4",
+        "mysql:unix_socket=/var/run/mysqld/mysqld.sock;dbname={$db};charset=utf8mb4",
+        "mysql:unix_socket=/tmp/mysql.sock;dbname={$db};charset=utf8mb4",
+    ];
+
+    $lastErr = null;
+    foreach ($dsnCandidates as $dsn) {
+        try {
+            $pdo = new PDO($dsn, $user, $pass, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_TIMEOUT => 3,
+            ]);
+            $pdoInstance = $pdo;
+            $pdoError = null;
+            return $pdoInstance;
+        } catch (\Throwable $e) {
+            $lastErr = $e->getMessage();
+        }
+    }
+
+    $pdoError = $lastErr;
+    return null;
 }
 
 $pdo = get_pdo($mysqlHost, $mysqlPort, $mysqlDb, $mysqlUser, $mysqlPass);
@@ -205,6 +228,7 @@ if ($cleanPath === '/api/health') {
         'backend' => 'SocietyOS Production Hostinger Gateway',
         'nodeRunning' => false,
         'mysqlConnected' => $pdo !== null,
+        'mysqlError' => $pdo ? null : $pdoError,
         'mysqlDatabase' => $mysqlDb,
         'mysqlTables' => $pdo ? (int)$pdo->query("SELECT count(*) FROM information_schema.tables WHERE table_schema = " . $pdo->quote($mysqlDb))->fetchColumn() : 0,
         'runtime' => 'PHP 8.3 LiteSpeed (Native Hostinger Gateway)',
@@ -1488,6 +1512,92 @@ if ($cleanPath === '/api/society/dashboard' && $method === 'GET') {
     exit;
 }
 
+// 3.11b RESET SOCIETY DATA TO ZERO (DOUBLE WARNING PROTECTED)
+if ($cleanPath === '/api/society/reset-data' && $method === 'POST') {
+    if (!$auth || empty($activeSocId)) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Authentication required.']);
+        exit;
+    }
+
+    $confirmation = trim($reqData['confirmation'] ?? '');
+    if ($confirmation !== 'RESET') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid confirmation. Please type RESET to confirm data wipe.']);
+        exit;
+    }
+
+    $wipeMembersAndFlats = !empty($reqData['wipeMembersAndFlats']);
+
+    if ($pdo && !empty($activeSocId)) {
+        try {
+            $pdo->beginTransaction();
+
+            // 1. Delete billing records
+            $pdo->prepare("DELETE FROM bill_items WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM bill_adjustments WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM member_bills WHERE society_id = ?")->execute([$activeSocId]);
+
+            // 2. Delete payments & receipts
+            $pdo->prepare("DELETE FROM payment_allocations WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM payment_receipts WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM payments WHERE society_id = ?")->execute([$activeSocId]);
+
+            // 3. Delete expenses & ledger entries
+            $pdo->prepare("DELETE FROM expenses WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM ledger_entries WHERE society_id = ?")->execute([$activeSocId]);
+
+            // 4. Delete complaints & suggestions
+            $pdo->prepare("DELETE FROM complaint_attachments WHERE complaint_id IN (SELECT id FROM complaints WHERE society_id = ?)")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM complaint_comments WHERE complaint_id IN (SELECT id FROM complaints WHERE society_id = ?)")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM complaints WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM suggestions WHERE society_id = ?")->execute([$activeSocId]);
+
+            // 5. Delete events, announcements, attendance, duty records
+            $pdo->prepare("DELETE FROM announcements WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM society_events WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM attendance_records WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM staff_duty_records WHERE society_id = ?")->execute([$activeSocId]);
+            $pdo->prepare("DELETE FROM notifications WHERE society_id = ? AND notification_type != 'PLATFORM_NOTICE'")->execute([$activeSocId]);
+
+            // 6. Reset financial accounts to zero
+            $pdo->prepare("UPDATE financial_accounts SET opening_balance = 0, current_balance = 0, updated_at = NOW() WHERE society_id = ?")->execute([$activeSocId]);
+
+            // 7. Reset household opening balances to zero
+            $pdo->prepare("UPDATE households SET opening_balance = 0, opening_balance_notes = NULL, opening_balance_date = NULL, updated_at = NOW() WHERE society_id = ?")->execute([$activeSocId]);
+
+            // 8. Optionally wipe test flats & members
+            if ($wipeMembersAndFlats) {
+                $curUserId = $auth['userId'] ?? '';
+                $pdo->prepare("DELETE FROM society_members WHERE society_id = ? AND user_id != ?")->execute([$activeSocId, $curUserId]);
+                $pdo->prepare("DELETE FROM member_invitations WHERE society_id = ?")->execute([$activeSocId]);
+                $pdo->prepare("DELETE FROM households WHERE society_id = ?")->execute([$activeSocId]);
+                $pdo->prepare("DELETE FROM apartment_blocks WHERE society_id = ?")->execute([$activeSocId]);
+            }
+
+            // 9. Audit log
+            $pdo->prepare("INSERT INTO audit_logs (id, society_id, actor_user_id, actor_role, action, entity_type, entity_id, details, created_at) VALUES (?, ?, ?, ?, 'RESET_TO_ZERO', 'SOCIETY', ?, 'Society database reset to zero by admin.', NOW())")->execute([
+                uuid_v4(), $activeSocId, $auth['userId'] ?? null, $auth['role'] ?? 'SOCIETY_ADMIN', $activeSocId
+            ]);
+
+            $pdo->commit();
+
+            http_response_code(200);
+            echo json_encode(['message' => 'Society database reset to zero successfully. All cards, bills, and balances are now ₹0.00.']);
+            exit;
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => 'Failed to reset database: ' . $e->getMessage()]);
+            exit;
+        }
+    }
+
+    http_response_code(200);
+    echo json_encode(['message' => 'Reset completed.']);
+    exit;
+}
+
 // 3.12a SOCIETY APARTMENT BLOCKS (GET & POST)
 if ($cleanPath === '/api/society/blocks') {
     if ($method === 'GET') {
@@ -1542,7 +1652,15 @@ if ($cleanPath === '/api/society/members') {
                 $block = trim($_GET['block'] ?? '');
                 $query = "
                     SELECT sm.*, u.email, u.phone, up.full_name as member_name, up.preferred_language,
-                           h.block_name, h.flat_number, h.floor_number
+                           h.block_name, h.flat_number, h.normalized_flat_number, h.floor_number, h.occupancy_type, h.area_sqft,
+                           h.opening_balance, h.opening_balance_notes, h.opening_balance_date,
+                           COALESCE((
+                               SELECT SUM(mb.balance_amount)
+                               FROM member_bills mb
+                               WHERE mb.household_id = h.id
+                                 AND (mb.bill_type = 'OPENING_BALANCE' OR (mb.bill_type = 'ADJUSTMENT' AND mb.adjustment_reason = 'OPENING_BALANCE') OR mb.bill_number LIKE 'OP-BAL-%')
+                                 AND mb.status NOT IN ('PAID', 'CANCELLED', 'DRAFT')
+                           ), 0) as opening_balance_dues
                     FROM society_members sm
                     LEFT JOIN users u ON u.id = sm.user_id
                     LEFT JOIN user_profiles up ON up.user_id = sm.user_id
@@ -1560,7 +1678,19 @@ if ($cleanPath === '/api/society/members') {
 
                 $members = $pdo->query($query)->fetchAll() ?: [];
                 $blocks = $pdo->query("SELECT * FROM apartment_blocks WHERE society_id = " . $pdo->quote($activeSocId) . " ORDER BY name ASC")->fetchAll() ?: [];
-                $households = $pdo->query("SELECT * FROM households WHERE society_id = " . $pdo->quote($activeSocId) . " ORDER BY flat_number ASC")->fetchAll() ?: [];
+                $households = $pdo->query("
+                    SELECT h.*,
+                           COALESCE((
+                               SELECT SUM(mb.balance_amount)
+                               FROM member_bills mb
+                               WHERE mb.household_id = h.id
+                                 AND (mb.bill_type = 'OPENING_BALANCE' OR (mb.bill_type = 'ADJUSTMENT' AND mb.adjustment_reason = 'OPENING_BALANCE') OR mb.bill_number LIKE 'OP-BAL-%')
+                                 AND mb.status NOT IN ('PAID', 'CANCELLED', 'DRAFT')
+                           ), 0) as opening_balance_dues
+                    FROM households h
+                    WHERE h.society_id = " . $pdo->quote($activeSocId) . " AND h.status != 'ARCHIVED'
+                    ORDER BY h.flat_number ASC
+                ")->fetchAll() ?: [];
             } catch (\Throwable $e) {}
         }
 
@@ -1804,10 +1934,90 @@ if (preg_match('#^/api/society/households/([^/]+)/transfer$#', $cleanPath, $m) &
 
 if (preg_match('#^/api/society/households/([^/]+)/opening-balance$#', $cleanPath, $m) && $method === 'POST') {
     $hhId = $m[1];
-    $opBal = floatval($reqData['openingBalance'] ?? 0);
+    $opBal = max(0, floatval($reqData['openingBalance'] ?? 0));
+    $notes = trim($reqData['notes'] ?? '');
     if ($pdo && !empty($activeSocId)) {
         try {
-            $pdo->prepare("UPDATE households SET opening_balance = ?, updated_at = NOW() WHERE id = ? AND society_id = ?")->execute([$opBal, $hhId, $activeSocId]);
+            $pdo->prepare("
+                UPDATE households 
+                SET opening_balance = ?, opening_balance_notes = ?, opening_balance_date = COALESCE(opening_balance_date, NOW()), updated_at = NOW() 
+                WHERE id = ? AND society_id = ?
+            ")->execute([$opBal, $notes, $hhId, $activeSocId]);
+
+            // Ensure 'OPENING_BALANCE' charge category exists
+            $chkCat = $pdo->prepare("SELECT id FROM charge_categories WHERE society_id = ? AND code = 'OPENING_BALANCE' LIMIT 1");
+            $chkCat->execute([$activeSocId]);
+            $cat = $chkCat->fetch();
+            if (!$cat) {
+                $catId = uuid_v4();
+                $pdo->prepare("
+                    INSERT INTO charge_categories (id, society_id, name, code, description, default_amount, billing_frequency, applicable_flats, due_day, is_single_charge_per_period, is_active, created_at, updated_at)
+                    VALUES (?, ?, 'Opening Balance Dues', 'OPENING_BALANCE', 'Prior outstanding ledger balance before system onboarding', 0, 'ONE_TIME', 'ALL', 10, 1, 1, NOW(), NOW())
+                ")->execute([$catId, $activeSocId]);
+                $cat = ['id' => $catId];
+            }
+
+            // Check if opening balance bill already exists
+            $chkBill = $pdo->prepare("
+                SELECT * FROM member_bills 
+                WHERE society_id = ? AND household_id = ? 
+                  AND (bill_type = 'OPENING_BALANCE' OR (bill_type = 'ADJUSTMENT' AND adjustment_reason = 'OPENING_BALANCE') OR bill_number LIKE 'OP-BAL-%')
+                  AND status != 'CANCELLED'
+                LIMIT 1
+            ");
+            $chkBill->execute([$activeSocId, $hhId]);
+            $existingBill = $chkBill->fetch();
+
+            if ($opBal > 0) {
+                if ($existingBill) {
+                    $paid = floatval($existingBill['paid_amount'] ?? 0);
+                    $newBal = max(0, $opBal - $paid);
+                    $newStatus = $newBal == 0 ? 'PAID' : ($paid > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
+                    $pdo->prepare("
+                        UPDATE member_bills
+                        SET subtotal_amount = ?, total_amount = ?, balance_amount = ?, status = ?, adjustment_reason = 'OPENING_BALANCE', updated_at = NOW()
+                        WHERE id = ?
+                    ")->execute([$opBal, $opBal, $newBal, $newStatus, $existingBill['id']]);
+
+                    $pdo->prepare("
+                        UPDATE bill_items
+                        SET amount = ?, description = ?, updated_at = NOW()
+                        WHERE bill_id = ?
+                    ")->execute([$opBal, $notes ?: 'Prior Outstanding Dues / Ledger Opening Balance', $existingBill['id']]);
+                } else {
+                    $hhRow = $pdo->prepare("SELECT * FROM households WHERE id = ? LIMIT 1");
+                    $hhRow->execute([$hhId]);
+                    $hh = $hhRow->fetch();
+                    $flatNorm = $hh ? preg_replace('/[^A-Z0-9]/', '', strtoupper($hh['normalized_flat_number'])) : 'FLAT';
+                    $billId = uuid_v4();
+                    $billNum = "OP-BAL-{$flatNorm}-" . strtoupper(substr(uniqid(), -4));
+                    $dueDate = date('Y-m-28');
+                    $mMonth = (int)date('n');
+                    $mYear = (int)date('Y');
+                    $primaryMemId = $hh['primary_member_id'] ?? null;
+
+                    $pdo->prepare("
+                        INSERT INTO member_bills (
+                            id, society_id, household_id, member_id, bill_number, billing_month, billing_year,
+                            bill_type, adjustment_reason, status, subtotal_amount, previous_balance, penalty_amount,
+                            credit_amount, total_amount, paid_amount, balance_amount, due_date, issued_at, created_by, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'OPENING_BALANCE', 'OPENING_BALANCE', 'UNPAID', ?, 0, 0, 0, ?, 0, ?, ?, NOW(), ?, NOW(), NOW())
+                    ")->execute([
+                        $billId, $activeSocId, $hhId, $primaryMemId, $billNum, $mMonth, $mYear,
+                        $opBal, $opBal, $opBal, $dueDate, $auth['userId'] ?? null
+                    ]);
+
+                    $pdo->prepare("
+                        INSERT INTO bill_items (id, society_id, bill_id, household_id, charge_category_id, category_name, billing_month, billing_year, description, amount, is_adjustment, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, 'Opening Balance Dues', ?, ?, ?, ?, 0, NOW(), NOW())
+                    ")->execute([
+                        uuid_v4(), $activeSocId, $billId, $hhId, $cat ? $cat['id'] : null, $mMonth, $mYear,
+                        $notes ?: 'Prior Outstanding Dues / Ledger Opening Balance', $opBal
+                    ]);
+                }
+            } elseif ($existingBill) {
+                $pdo->prepare("UPDATE member_bills SET status = 'CANCELLED', balance_amount = 0, updated_at = NOW() WHERE id = ?")->execute([$existingBill['id']]);
+            }
         } catch (\Throwable $e) {}
     }
     http_response_code(200);
@@ -1877,18 +2087,21 @@ if ($cleanPath === '/api/society/charge-categories') {
 
 // 3.13b GENERATE & PUBLISH BILLS
 if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
-    $month = intval($reqData['month'] ?? date('n'));
-    $year = intval($reqData['year'] ?? date('Y'));
-    $dueDate = $reqData['dueDate'] ?? date('Y-m-10');
+    $month = intval($reqData['billingMonth'] ?? $reqData['month'] ?? date('n'));
+    $year = intval($reqData['billingYear'] ?? $reqData['year'] ?? date('Y'));
+    $dueDate = $reqData['dueDate'] ?? date('Y-m-15');
     $categoryIds = $reqData['chargeCategoryIds'] ?? [];
-    $targetFlats = $reqData['targetFlats'] ?? 'ALL';
     $selectedHouseholdId = $reqData['householdId'] ?? null;
+    $includeOpeningBalance = isset($reqData['includeOpeningBalance']) ? (bool)$reqData['includeOpeningBalance'] : true;
+    $asDraft = !empty($reqData['asDraft']);
+    $penaltyAmount = floatval($reqData['penaltyAmount'] ?? 0);
+    $creditAmount = floatval($reqData['creditAmount'] ?? 0);
 
     $generatedCount = 0;
     if ($pdo && !empty($activeSocId)) {
         try {
             $hhQuery = "SELECT * FROM households WHERE society_id = " . $pdo->quote($activeSocId) . " AND status != 'ARCHIVED'";
-            if ($targetFlats === 'SINGLE' && !empty($selectedHouseholdId)) {
+            if (!empty($selectedHouseholdId)) {
                 $hhQuery .= " AND id = " . $pdo->quote($selectedHouseholdId);
             }
             $households = $pdo->query($hhQuery)->fetchAll() ?: [];
@@ -1903,34 +2116,52 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
             }
 
             foreach ($households as $hh) {
-                $chkBill = $pdo->prepare("SELECT id FROM member_bills WHERE household_id = ? AND billing_month = ? AND billing_year = ? LIMIT 1");
-                $chkBill->execute([$hh['id'], $month, $year]);
+                // Check duplicate regular bill
+                $chkBill = $pdo->prepare("SELECT id FROM member_bills WHERE society_id = ? AND household_id = ? AND billing_month = ? AND billing_year = ? AND bill_type = 'REGULAR' AND status != 'CANCELLED' LIMIT 1");
+                $chkBill->execute([$activeSocId, $hh['id'], $month, $year]);
                 if ($chkBill->fetch()) continue;
 
                 $billId = uuid_v4();
-                $billNum = sprintf('INV-%s-%04d%02d-%s', substr($hh['normalized_flat_number'], 0, 4), $year, $month, substr(uniqid(), -3));
-                $totalAmt = 0;
+                $flatClean = preg_replace('/[^A-Z0-9]/', '', strtoupper($hh['normalized_flat_number']));
+                $billNum = sprintf('BILL-%04d%02d-%s-%s', $year, $month, substr($flatClean, 0, 6), strtoupper(substr(uniqid(), -4)));
+                $subtotalAmt = 0;
 
                 foreach ($cats as $cat) {
                     $amt = floatval($cat['default_amount']);
-                    $totalAmt += $amt;
+                    $subtotalAmt += $amt;
                     $pdo->prepare("
-                        INSERT INTO bill_items (id, bill_id, society_id, category_id, name, amount, description, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-                    ")->execute([uuid_v4(), $billId, $activeSocId, $cat['id'], $cat['name'], $amt, $cat['description']]);
+                        INSERT INTO bill_items (id, society_id, bill_id, household_id, charge_category_id, category_name, description, amount, is_adjustment, billing_month, billing_year, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NOW(), NOW())
+                    ")->execute([uuid_v4(), $activeSocId, $billId, $hh['id'], $cat['id'], $cat['name'], "{$cat['name']} ({$month}/{$year})", $amt, $month, $year]);
                 }
 
+                // Calculate previous balance from unpaid prior regular monthly bills (opening balance is tracked separately)
+                $prevRow = $pdo->prepare("
+                    SELECT COALESCE(SUM(balance_amount), 0) as prev
+                    FROM member_bills
+                    WHERE society_id = ? AND household_id = ? AND status NOT IN ('PAID', 'CANCELLED', 'DRAFT')
+                      AND bill_type = 'REGULAR'
+                      AND (billing_year < ? OR (billing_year = ? AND billing_month < ?))
+                ");
+                $prevRow->execute([$activeSocId, $hh['id'], $year, $year, $month]);
+                $previousBalance = floatval($prevRow->fetchColumn() ?: 0);
+
+                $totalAmt = max(0, $subtotalAmt + $previousBalance + $penaltyAmount - $creditAmount);
                 $primaryMemId = $hh['primary_member_id'] ?: null;
+                $billStatus = $asDraft ? 'DRAFT' : 'UNPAID';
+
                 $pdo->prepare("
                     INSERT INTO member_bills (
                         id, society_id, household_id, member_id, bill_number, billing_month, billing_year,
-                        period_start, period_end, due_date, subtotal_amount, total_amount, paid_amount,
-                        balance_amount, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?, ?, 0, ?, 'GENERATED', NOW(), NOW())
+                        bill_type, status, subtotal_amount, previous_balance, penalty_amount, credit_amount,
+                        total_amount, paid_amount, balance_amount, due_date, issued_at, created_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'REGULAR', ?, ?, ?, ?, ?, ?, 0, ?, ?, NOW(), ?, NOW(), NOW())
                 ")->execute([
                     $billId, $activeSocId, $hh['id'], $primaryMemId, $billNum, $month, $year,
-                    $dueDate, $totalAmt, $totalAmt, $totalAmt
+                    $billStatus, $subtotalAmt, $previousBalance, $penaltyAmount, $creditAmount,
+                    $totalAmt, $totalAmt, $dueDate, $auth['userId'] ?? null
                 ]);
+
                 $generatedCount++;
             }
         } catch (\Throwable $e) {}

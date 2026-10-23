@@ -30,6 +30,9 @@ import {
   Menu,
   X,
   QrCode,
+  RotateCcw,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, downloadCsv, openRazorpayCheckout } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
@@ -191,11 +194,18 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     billingYear: new Date().getFullYear(),
     householdId: '', // empty = bulk all active flats
     chargeCategoryIds: [] as string[],
+    includeOpeningBalance: true,
     penaltyAmount: 0,
     creditAmount: 0,
     asDraft: false,
     dueDate: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-15`,
   });
+
+  // State for Double Warning Society Database Reset to Zero
+  const [resetModalStep, setResetModalStep] = useState<0 | 1 | 2>(0);
+  const [resetConfirmInput, setResetConfirmInput] = useState('');
+  const [wipeFlatsAndMembers, setWipeFlatsAndMembers] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const [suppBillForm, setSuppBillForm] = useState({
     householdId: '',
@@ -553,6 +563,15 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
           </div>
 
           <div className="topbar-actions">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              style={{ color: '#ef4444', borderColor: '#fca5a5' }}
+              onClick={() => { setResetModalStep(1); setResetConfirmInput(''); }}
+              title="Reset Society Database to Zero (Double Confirmation)"
+            >
+              <RotateCcw size={14} /> <span>Reset to Zero</span>
+            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={refreshCurrentTab} title="Refresh Data">
               <RefreshCw size={14} /> <span>Refresh</span>
             </button>
@@ -3061,6 +3080,33 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 <div>
                   <button type="submit" className="btn btn-primary">Save Society Configuration & Gateway Keys</button>
                 </div>
+
+                <div style={{ marginTop: '1.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem' }}>
+                  <div className="card" style={{ border: '1px solid #ef4444', background: 'rgba(239, 68, 68, 0.04)', display: 'grid', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                      <AlertTriangle size={22} style={{ color: '#ef4444' }} />
+                      <div>
+                        <h4 style={{ margin: 0, color: '#ef4444', fontSize: '1rem' }}>Danger Zone: Reset Society Database to Zero</h4>
+                        <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                          Permanently wipe all bills, payments, receipts, ledger entries, expenses, complaints, and reset bank/cash accounts to ₹0.00.
+                        </p>
+                      </div>
+                    </div>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: 0 }}>
+                      Use this feature to reset test societies or start fresh with cleanly zeroed cards. Protected with double confirmation to prevent accidental data loss.
+                    </p>
+                    <div>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{ background: '#ef4444', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', padding: '0.5rem 1rem', fontWeight: 600 }}
+                        onClick={() => { setResetModalStep(1); setResetConfirmInput(''); }}
+                      >
+                        <Trash2 size={15} /> Reset Society Database to Zero
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </form>
             </div>
           )}
@@ -3933,10 +3979,20 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 </div>
               </div>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.86rem' }}>
-                <input type="checkbox" checked={genBillForm.asDraft} onChange={(e) => setGenBillForm({ ...genBillForm, asDraft: e.target.checked })} />
-                Save as Draft Bill first for review before publishing
-              </label>
+              <div style={{ display: 'grid', gap: '0.4rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.86rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={genBillForm.includeOpeningBalance}
+                    onChange={(e) => setGenBillForm({ ...genBillForm, includeOpeningBalance: e.target.checked })}
+                  />
+                  <span>Include flat's prior opening balance & unpaid dues in bill total</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.86rem' }}>
+                  <input type="checkbox" checked={genBillForm.asDraft} onChange={(e) => setGenBillForm({ ...genBillForm, asDraft: e.target.checked })} />
+                  <span>Save as Draft Bill first for review before publishing</span>
+                </label>
+              </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Cancel</button>
@@ -4475,6 +4531,149 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 <button type="submit" className="btn btn-primary">Submit UPI Payment Reference</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: RESET SOCIETY DATABASE TO ZERO (DOUBLE WARNING) */}
+      {resetModalStep === 1 && (
+        <div className="modal-backdrop" onClick={() => setResetModalStep(0)}>
+          <div className="modal-card" style={{ maxWidth: 520, borderTop: '4px solid #ef4444' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.75rem' }}>
+              <AlertTriangle size={24} style={{ color: '#ef4444' }} />
+              <div>
+                <h3 style={{ margin: 0, color: '#ef4444' }}>Warning 1 of 2: Reset Society Database to Zero?</h3>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>First Confirmation Check</span>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.5 }}>
+              You are about to completely wipe all transaction and financial history for <strong>{currentSociety.name}</strong>.
+            </p>
+
+            <div style={{ background: 'var(--bg-subtle)', padding: '0.85rem', borderRadius: 8, fontSize: '0.82rem', margin: '0.75rem 0', display: 'grid', gap: '0.4rem', border: '1px solid var(--border-color)' }}>
+              <strong>The following will be completely wiped & set to zero:</strong>
+              <div>• All Member Bills & Charge Line Items (wiped)</div>
+              <div>• All Member Payments, Allocations & Receipts (wiped)</div>
+              <div>• All Society Expenses & Financial Ledger Entries (wiped)</div>
+              <div>• Bank and Cash Account Balances will be set to <strong>₹0.00</strong></div>
+              <div>• All Flat Opening Balances will be set to <strong>₹0.00</strong></div>
+              <div>• All Complaints, Suggestions & Visitor Logs (wiped)</div>
+              <div style={{ marginTop: '0.25rem', color: 'var(--success)', fontWeight: 600 }}>
+                ✓ Flat numbers and member login credentials are kept intact at ₹0.00 dues.
+              </div>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.83rem', margin: '0.75rem 0', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={wipeFlatsAndMembers}
+                onChange={(e) => setWipeFlatsAndMembers(e.target.checked)}
+              />
+              <span style={{ color: wipeFlatsAndMembers ? '#ef4444' : 'inherit' }}>
+                Also remove test flats & enrolled members (leaves society completely empty)
+              </span>
+            </label>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setResetModalStep(0)}>Cancel</button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ background: '#ef4444', borderColor: '#ef4444' }}
+                onClick={() => { setResetModalStep(2); setResetConfirmInput(''); }}
+              >
+                Proceed to Final Confirmation →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resetModalStep === 2 && (
+        <div className="modal-backdrop" onClick={() => !isResetting && setResetModalStep(0)}>
+          <div className="modal-card" style={{ maxWidth: 480, borderTop: '4px solid #b91c1c' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.75rem' }}>
+              <ShieldAlert size={26} style={{ color: '#b91c1c' }} />
+              <div>
+                <h3 style={{ margin: 0, color: '#b91c1c' }}>Warning 2 of 2: Final Confirmation</h3>
+                <span style={{ fontSize: '0.75rem', color: '#ef4444', fontWeight: 600 }}>IRREVERSIBLE ACTION</span>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.5, marginBottom: '0.75rem' }}>
+              This action <strong>CANNOT</strong> be undone. All dashboard metric cards (Total Collected, Outstanding Dues, Income, Expenses, Bank/Cash) will be reset to <strong>₹0.00</strong>.
+            </p>
+
+            <div style={{ margin: '0.85rem 0' }}>
+              <label style={{ fontSize: '0.82rem', fontWeight: 600, display: 'block', marginBottom: '0.35rem' }}>
+                Type <span style={{ color: '#ef4444', fontFamily: 'monospace', fontWeight: 700 }}>RESET</span> below to confirm data wipe:
+              </label>
+              <input
+                type="text"
+                autoFocus
+                disabled={isResetting}
+                className="input"
+                placeholder="Type RESET here"
+                value={resetConfirmInput}
+                onChange={(e) => setResetConfirmInput(e.target.value)}
+                style={{ fontFamily: 'monospace', fontSize: '1rem', letterSpacing: '0.1em' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.25rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={isResetting}
+                onClick={() => setResetModalStep(1)}
+              >
+                ← Back
+              </button>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={isResetting}
+                  onClick={() => setResetModalStep(0)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  disabled={resetConfirmInput !== 'RESET' || isResetting}
+                  style={{
+                    background: resetConfirmInput === 'RESET' ? '#b91c1c' : '#fca5a5',
+                    borderColor: '#b91c1c',
+                    cursor: resetConfirmInput === 'RESET' ? 'pointer' : 'not-allowed',
+                    fontWeight: 700,
+                  }}
+                  onClick={async () => {
+                    setIsResetting(true);
+                    try {
+                      const res = await apiFetch('/api/society/reset-data', {
+                        method: 'POST',
+                        body: {
+                          confirmation: resetConfirmInput.trim(),
+                          wipeMembersAndFlats,
+                        },
+                      });
+                      notify(res.message || 'Society database reset to zero successfully.');
+                      setResetModalStep(0);
+                      setResetConfirmInput('');
+                      refreshCurrentTab();
+                    } catch (err: any) {
+                      notify(err.message, 'error');
+                    } finally {
+                      setIsResetting(false);
+                    }
+                  }}
+                >
+                  {isResetting ? 'Wiping Database...' : 'Confirm & Wipe Database to Zero'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

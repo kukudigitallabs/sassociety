@@ -595,4 +595,33 @@ describe('SocietyOS SaaS — Comprehensive Acceptance Criteria Suite (Section 22
     assert.equal(Number(dashRes4.data.openingBalanceDues), 0);
     assert.equal(Number(dashRes4.data.totalOutstanding), Number(regularCat.default_amount));
   });
+
+  it('AC 15: Society Admin resets database to zero with double warning confirmation', async () => {
+    // 1. Rejected if confirmation string is not 'RESET'
+    const rejectRes = await api('/api/society/reset-data', {
+      method: 'POST',
+      token: societyAToken,
+      body: { confirmation: 'WRONG' },
+    });
+    assert.equal(rejectRes.status, 400);
+
+    // 2. Perform zero-reset with correct confirmation
+    const resetRes = await api('/api/society/reset-data', {
+      method: 'POST',
+      token: societyAToken,
+      body: { confirmation: 'RESET', wipeMembersAndFlats: false },
+    });
+    assert.equal(resetRes.status, 200);
+
+    // 3. Verify Society Dashboard returns 0 across all financial cards
+    const dashRes = await api('/api/society/dashboard', { token: societyAToken });
+    assert.equal(dashRes.status, 200);
+    assert.equal(Number(dashRes.data.kpis.totalBilledAmount), 0);
+    assert.equal(Number(dashRes.data.kpis.totalCollectedAmount), 0);
+    assert.equal(Number(dashRes.data.kpis.totalOutstandingDues), 0);
+    assert.equal(Number(dashRes.data.kpis.billsIssuedThisMonth), 0);
+    assert.equal(Number(dashRes.data.kpis.currentCashBalance), 0);
+    assert.equal(Number(dashRes.data.kpis.currentBankBalance), 0);
+    assert.equal(Number(dashRes.data.kpis.openComplaints), 0);
+  });
 });

@@ -22029,7 +22029,7 @@ async function pushAllTablesToMysql(conn) {
     await conn.query("SET FOREIGN_KEY_CHECKS = 1;");
   }
 }
-async function syncToMysqlAfterWrite2() {
+async function syncToMysqlAfterWrite() {
   if (!isMysqlEnabled() || !mysqlPool || !mysqlConnected || syncInProgress) {
     return;
   }
@@ -23924,7 +23924,7 @@ async function handleApiRequest(ctx) {
         reqPerm = method === "GET" ? void 0 : "manage_events";
       } else if (pathname.startsWith("/api/society/staff") || pathname.startsWith("/api/society/roles") || pathname.startsWith("/api/society/attendance")) {
         reqPerm = method === "GET" ? void 0 : "manage_staff";
-      } else if (pathname.startsWith("/api/society/settings")) {
+      } else if (pathname.startsWith("/api/society/settings") || pathname === "/api/society/reset-data") {
         reqPerm = method === "GET" ? void 0 : "change_society_settings";
       }
       const access = hasSocietyAccess(auth, reqPerm);
@@ -24306,6 +24306,7 @@ async function handleApiRequest(ctx) {
           db.exec("COMMIT");
           return sendJson(res, 201, { memberId, householdId, normalizedFlatNumber: normalizedFlat, message: "Member enrolled successfully." });
         } catch (err) {
+          console.error("[RESET ERROR]", err);
           db.exec("ROLLBACK");
           if (String(err?.message || "").includes("UNIQUE constraint failed")) {
             return sendJson(res, 409, { error: "This flat/house number is already registered in this society." });
@@ -24690,6 +24691,7 @@ async function handleApiRequest(ctx) {
             message: `Generated ${createdBills.length} bill(s) for ${m}/${y}.${skippedDuplicates.length ? ` Skipped ${skippedDuplicates.length} already-billed flat(s).` : ""}`
           });
         } catch (err) {
+          console.error("[RESET ERROR]", err);
           db.exec("ROLLBACK");
           if (String(err?.message || "").includes("UNIQUE constraint failed")) {
             return sendJson(res, 409, {
@@ -25234,6 +25236,7 @@ async function handleApiRequest(ctx) {
           db.exec("COMMIT");
           return sendJson(res, 201, { roleId, message: "Custom staff/office-bearer role created." });
         } catch (err) {
+          console.error("[RESET ERROR]", err);
           db.exec("ROLLBACK");
           if (String(err?.message || "").includes("UNIQUE")) {
             return sendJson(res, 409, { error: "A role with this name already exists in your society." });
@@ -25960,6 +25963,58 @@ async function handleApiRequest(ctx) {
         });
         return sendJson(res, 200, { message: "Society settings and custom payment gateway keys saved." });
       }
+      if (pathname === "/api/society/reset-data" && method === "POST") {
+        const { confirmation, wipeMembersAndFlats = false } = body;
+        if (confirmation !== "RESET") {
+          return sendJson(res, 400, { error: "Invalid confirmation. Please type RESET to confirm data wipe." });
+        }
+        const isSuper = auth.role === "SUPER_ADMIN";
+        const isSocAdmin = auth.role === "SOCIETY_ADMIN" && auth.societyId === societyId;
+        if (!isSuper && !isSocAdmin) {
+          return sendJson(res, 403, { error: "Forbidden: Only Society Admin or Super Admin can reset society data." });
+        }
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          db.prepare("DELETE FROM payment_allocations WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM payment_receipts WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM payments WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM bill_items WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM bill_adjustments WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM member_bills WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM expenses WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM ledger_entries WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM complaint_attachments WHERE complaint_id IN (SELECT id FROM complaints WHERE society_id = ?)").run(societyId);
+          db.prepare("DELETE FROM complaint_comments WHERE complaint_id IN (SELECT id FROM complaints WHERE society_id = ?)").run(societyId);
+          db.prepare("DELETE FROM complaints WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM suggestions WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM announcements WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM society_events WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM attendance_records WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM staff_duty_records WHERE society_id = ?").run(societyId);
+          db.prepare("DELETE FROM notifications WHERE society_id = ? AND notification_type != 'PLATFORM_NOTICE'").run(societyId);
+          db.prepare("UPDATE financial_accounts SET opening_balance = 0, current_balance = 0, updated_at = datetime('now') WHERE society_id = ?").run(societyId);
+          db.prepare("UPDATE households SET opening_balance = 0, opening_balance_notes = NULL, opening_balance_date = NULL, updated_at = datetime('now') WHERE society_id = ?").run(societyId);
+          if (wipeMembersAndFlats) {
+            db.prepare("DELETE FROM society_members WHERE society_id = ? AND user_id != ?").run(societyId, auth.userId);
+            db.prepare("DELETE FROM member_invitations WHERE society_id = ?").run(societyId);
+            db.prepare("DELETE FROM households WHERE society_id = ?").run(societyId);
+            db.prepare("DELETE FROM apartment_blocks WHERE society_id = ?").run(societyId);
+          }
+          db.prepare(`
+            INSERT INTO audit_logs (id, society_id, actor_user_id, actor_role, action, entity_type, entity_id, details, created_at)
+            VALUES (?, ?, ?, ?, 'RESET_TO_ZERO', 'SOCIETY', ?, 'Society database reset to zero by admin', datetime('now'))
+          `).run(uuid(), societyId, auth.userId, auth.role, societyId);
+          db.exec("COMMIT");
+          syncToMysqlAfterWrite();
+          return sendJson(res, 200, { message: "Society database reset to zero successfully. All financial cards are now \u20B90.00." });
+        } catch (err) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+          }
+          return sendJson(res, 500, { error: "Failed to reset database: " + err.message });
+        }
+      }
     }
     if (pathname.startsWith("/api/member")) {
       if (!auth || auth.role !== "MEMBER" || !auth.societyId) {
@@ -26296,7 +26351,7 @@ function runScheduledRemindersJob() {
         });
       }
     }
-    syncToMysqlAfterWrite2();
+    syncToMysqlAfterWrite();
   } catch (err) {
     console.error("[Reminder Job Error]", err);
   }
@@ -26406,7 +26461,7 @@ async function createServer(options = { withVite: true }) {
         const auth = token ? verifyJwt(token) : null;
         await handleApiRequest({ req, res, url, method, body, auth });
         if (method !== "GET" && method !== "HEAD") {
-          syncToMysqlAfterWrite2();
+          syncToMysqlAfterWrite();
         }
       } catch (err) {
         sendJson(res, 400, { error: err?.message || "Bad request" });
