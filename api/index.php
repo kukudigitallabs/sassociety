@@ -1103,10 +1103,36 @@ if ($cleanPath === '/api/society/settings') {
 if ($cleanPath === '/api/society/dashboard' && $method === 'GET') {
     $society = null;
     $totalHouseholds = 0;
-    $totalMembers = 0;
+    $activeMembers = 0;
+    $pendingEnrolments = 0;
+    $blockedMembers = 0;
+    $billsThisMonth = 0;
+    $totalBilledAmount = 0.0;
+    $totalCollectedAmount = 0.0;
+    $pendingVerificationAmount = 0.0;
+    $rejectedPaymentsAmount = 0.0;
+    $totalOutstandingDues = 0.0;
+    $overdueBillsCount = 0;
+    $partialBillsCount = 0;
+    $monthlyIncome = 0.0;
+    $monthlyExpenses = 0.0;
+    $currentCashBalance = 0.0;
+    $currentBankBalance = 0.0;
     $openComplaints = 0;
+    $resolvedComplaints = 0;
+    $onDutyStaffCount = 0;
     $recentPayments = [];
     $recentComplaints = [];
+    $recentEnrolments = [];
+
+    $currentMonth = (int)($_GET['month'] ?? date('n'));
+    $currentYear = (int)($_GET['year'] ?? date('Y'));
+    $monthPrefix = sprintf('%04d-%02d', $currentYear, $currentMonth);
+
+    $planName = 'Trial Plan';
+    $subStatus = 'TRIAL';
+    $daysRemaining = 14;
+    $totalAmountDue = 0.0;
 
     if ($pdo && !empty($activeSocId)) {
         try {
@@ -1114,42 +1140,90 @@ if ($cleanPath === '/api/society/dashboard' && $method === 'GET') {
             $socStmt->execute([$activeSocId]);
             $society = $socStmt->fetch();
 
-            $totalHouseholds = (int)$pdo->query("SELECT count(*) FROM households WHERE society_id = " . $pdo->quote($activeSocId))->fetchColumn();
-            $totalMembers = (int)$pdo->query("SELECT count(*) FROM society_members WHERE society_id = " . $pdo->quote($activeSocId))->fetchColumn();
-            $openComplaints = (int)$pdo->query("SELECT count(*) FROM complaints WHERE society_id = " . $pdo->quote($activeSocId) . " AND status != 'RESOLVED'")->fetchColumn();
+            if ($society) {
+                $subStatus = $society['subscription_status'] ?? 'TRIAL';
+                if (!empty($society['subscription_plan_id'])) {
+                    $planRow = $pdo->prepare("SELECT name, price_amount FROM subscription_plans WHERE id = ? LIMIT 1");
+                    $planRow->execute([$society['subscription_plan_id']]);
+                    $plan = $planRow->fetch();
+                    if ($plan) {
+                        $planName = $plan['name'];
+                        $totalAmountDue = (float)$plan['price_amount'];
+                    }
+                }
+                if (!empty($society['trial_ends_at'])) {
+                    $daysRemaining = max(0, (int)ceil((strtotime($society['trial_ends_at']) - time()) / 86400));
+                } elseif (!empty($society['subscription_ends_at'])) {
+                    $daysRemaining = max(0, (int)ceil((strtotime($society['subscription_ends_at']) - time()) / 86400));
+                }
+            }
 
-            $recentPayments = $pdo->query("SELECT p.*, h.flat_number FROM payments p LEFT JOIN households h ON h.id = p.household_id WHERE p.society_id = " . $pdo->quote($activeSocId) . " ORDER BY p.created_at DESC LIMIT 10")->fetchAll() ?: [];
-            $recentComplaints = $pdo->query("SELECT * FROM complaints WHERE society_id = " . $pdo->quote($activeSocId) . " ORDER BY created_at DESC LIMIT 10")->fetchAll() ?: [];
+            $totalHouseholds = (int)$pdo->query("SELECT COUNT(*) FROM households WHERE society_id = " . $pdo->quote($activeSocId) . " AND status != 'ARCHIVED'")->fetchColumn();
+            $activeMembers = (int)$pdo->query("SELECT COUNT(*) FROM society_members WHERE society_id = " . $pdo->quote($activeSocId) . " AND account_status = 'ACTIVE' AND approval_status = 'APPROVED'")->fetchColumn();
+            $pendingEnrolments = (int)$pdo->query("SELECT COUNT(*) FROM society_members WHERE society_id = " . $pdo->quote($activeSocId) . " AND approval_status = 'PENDING'")->fetchColumn();
+            $blockedMembers = (int)$pdo->query("SELECT COUNT(*) FROM society_members WHERE society_id = " . $pdo->quote($activeSocId) . " AND account_status = 'BLOCKED'")->fetchColumn();
+
+            $billsThisMonth = (int)$pdo->query("SELECT COUNT(*) FROM member_bills WHERE society_id = " . $pdo->quote($activeSocId) . " AND billing_month = {$currentMonth} AND billing_year = {$currentYear} AND status != 'CANCELLED'")->fetchColumn();
+            $totalBilledAmount = (float)$pdo->query("SELECT COALESCE(SUM(total_amount), 0) FROM member_bills WHERE society_id = " . $pdo->quote($activeSocId) . " AND status NOT IN ('CANCELLED', 'DRAFT')")->fetchColumn();
+            $totalCollectedAmount = (float)$pdo->query("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE society_id = " . $pdo->quote($activeSocId) . " AND payment_status IN ('SUCCESS', 'CONFIRMED')")->fetchColumn();
+            $pendingVerificationAmount = (float)$pdo->query("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE society_id = " . $pdo->quote($activeSocId) . " AND payment_status IN ('PENDING_VERIFICATION', 'PAYMENT_SUBMITTED', 'PENDING')")->fetchColumn();
+            $rejectedPaymentsAmount = (float)$pdo->query("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE society_id = " . $pdo->quote($activeSocId) . " AND payment_status = 'REJECTED'")->fetchColumn();
+            $totalOutstandingDues = (float)$pdo->query("SELECT COALESCE(SUM(balance_amount), 0) FROM member_bills WHERE society_id = " . $pdo->quote($activeSocId) . " AND status NOT IN ('PAID', 'CANCELLED', 'DRAFT')")->fetchColumn();
+            $overdueBillsCount = (int)$pdo->query("SELECT COUNT(*) FROM member_bills WHERE society_id = " . $pdo->quote($activeSocId) . " AND balance_amount > 0 AND (status = 'OVERDUE' OR due_date < CURDATE()) AND status NOT IN ('PAID', 'CANCELLED', 'DRAFT')")->fetchColumn();
+            $partialBillsCount = (int)$pdo->query("SELECT COUNT(*) FROM member_bills WHERE society_id = " . $pdo->quote($activeSocId) . " AND status = 'PARTIALLY_PAID'")->fetchColumn();
+
+            $monthlyIncome = (float)$pdo->query("SELECT COALESCE(SUM(amount), 0) FROM ledger_entries WHERE society_id = " . $pdo->quote($activeSocId) . " AND entry_type = 'INCOME' AND entry_date LIKE " . $pdo->quote($monthPrefix . '%'))->fetchColumn();
+            $monthlyExpenses = (float)$pdo->query("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE society_id = " . $pdo->quote($activeSocId) . " AND status = 'APPROVED' AND expense_date LIKE " . $pdo->quote($monthPrefix . '%'))->fetchColumn();
+
+            $cashAcc = $pdo->query("SELECT current_balance FROM financial_accounts WHERE society_id = " . $pdo->quote($activeSocId) . " AND account_type = 'CASH' LIMIT 1")->fetch();
+            $bankAcc = $pdo->query("SELECT current_balance FROM financial_accounts WHERE society_id = " . $pdo->quote($activeSocId) . " AND account_type = 'BANK' LIMIT 1")->fetch();
+            $currentCashBalance = $cashAcc ? (float)$cashAcc['current_balance'] : 0.0;
+            $currentBankBalance = $bankAcc ? (float)$bankAcc['current_balance'] : 0.0;
+
+            $openComplaints = (int)$pdo->query("SELECT COUNT(*) FROM complaints WHERE society_id = " . $pdo->quote($activeSocId) . " AND status IN ('SUBMITTED', 'IN_PROGRESS', 'OPEN')")->fetchColumn();
+            $resolvedComplaints = (int)$pdo->query("SELECT COUNT(*) FROM complaints WHERE society_id = " . $pdo->quote($activeSocId) . " AND status = 'RESOLVED'")->fetchColumn();
+            $onDutyStaffCount = (int)$pdo->query("SELECT COUNT(*) FROM staff WHERE society_id = " . $pdo->quote($activeSocId) . " AND (duty_status = 'ON_DUTY' OR is_on_duty = 1)")->fetchColumn();
+
+            $recentPayments = $pdo->query("SELECT p.*, h.flat_number, sm.full_name as member_name FROM payments p LEFT JOIN households h ON h.id = p.household_id LEFT JOIN society_members sm ON sm.id = p.member_id WHERE p.society_id = " . $pdo->quote($activeSocId) . " ORDER BY p.created_at DESC LIMIT 10")->fetchAll() ?: [];
+            $recentComplaints = $pdo->query("SELECT c.*, sm.full_name as member_name FROM complaints c LEFT JOIN society_members sm ON sm.id = c.member_id WHERE c.society_id = " . $pdo->quote($activeSocId) . " ORDER BY c.created_at DESC LIMIT 10")->fetchAll() ?: [];
+            $recentEnrolments = $pdo->query("SELECT sm.*, h.flat_number, h.block_name FROM society_members sm LEFT JOIN households h ON h.id = sm.household_id WHERE sm.society_id = " . $pdo->quote($activeSocId) . " ORDER BY sm.created_at DESC LIMIT 6")->fetchAll() ?: [];
         } catch (\Throwable $e) {}
     }
 
     http_response_code(200);
     echo json_encode([
-        'society' => $society ?: ['name' => 'Green Valley Residency', 'enrollment_code' => 'GVR-2026'],
+        'society' => $society ?: ['name' => 'Society Portal', 'enrollment_code' => ''],
         'subscriptionSummary' => [
-            'planName' => 'Enterprise Annual RWA Suite',
-            'subscriptionStatus' => 'ACTIVE',
-            'daysRemaining' => 330,
-            'totalAmountDue' => 19999,
+            'planName' => $planName,
+            'subscriptionStatus' => $subStatus,
+            'daysRemaining' => $daysRemaining,
+            'totalAmountDue' => $totalAmountDue,
         ],
         'superAdminNotifications' => [],
         'allSocietyNotifications' => [],
         'recentPayments' => $recentPayments,
         'recentComplaints' => $recentComplaints,
+        'recentEnrolments' => $recentEnrolments,
         'kpis' => [
-            'totalRegisteredHouseholds' => $totalHouseholds ?: 4,
-            'activeMembers' => $totalMembers ?: 3,
-            'pendingEnrolmentApprovals' => 0,
-            'totalBilledAmount' => 144000,
-            'totalCollectedAmount' => 125000,
-            'totalOutstandingDues' => 19000,
-            'overdueBills' => 1,
+            'totalRegisteredHouseholds' => $totalHouseholds,
+            'activeMembers' => $activeMembers,
+            'pendingEnrolmentApprovals' => $pendingEnrolments,
+            'blockedMembers' => $blockedMembers,
+            'billsIssuedThisMonth' => $billsThisMonth,
+            'totalBilledAmount' => $totalBilledAmount,
+            'totalCollectedAmount' => $totalCollectedAmount,
+            'pendingPaymentVerification' => $pendingVerificationAmount,
+            'rejectedPaymentsAmount' => $rejectedPaymentsAmount,
+            'totalOutstandingDues' => $totalOutstandingDues,
+            'overdueBills' => $overdueBillsCount,
+            'partialPaymentsCount' => $partialBillsCount,
+            'monthlyIncome' => $monthlyIncome,
+            'monthlyExpenses' => $monthlyExpenses,
+            'currentCashBalance' => $currentCashBalance,
+            'currentBankBalance' => $currentBankBalance,
             'openComplaints' => $openComplaints,
-            'resolvedComplaints' => 5,
-            'monthlyIncome' => 125000,
-            'monthlyExpenses' => 45000,
-            'currentCashBalance' => 5000,
-            'currentBankBalance' => 30000,
+            'resolvedComplaints' => $resolvedComplaints,
+            'onDutyStaff' => $onDutyStaffCount,
         ],
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     exit;
@@ -2164,9 +2238,25 @@ if ($cleanPath === '/api/society/expense-categories' && $method === 'POST') {
 
 if ($cleanPath === '/api/society/reports' && $method === 'GET') {
     $entries = [];
+    $realizedIncome = 0.0;
+    $approvedExpenses = 0.0;
+    $totalBilledReceivables = 0.0;
+    $outstandingReceivables = 0.0;
+    $bankBalance = 0.0;
+    $cashBalance = 0.0;
+
     if ($pdo && !empty($activeSocId)) {
         try {
             $entries = $pdo->query("SELECT * FROM ledger_entries WHERE society_id = " . $pdo->quote($activeSocId) . " ORDER BY entry_date DESC LIMIT 100")->fetchAll() ?: [];
+            $realizedIncome = (float)$pdo->query("SELECT COALESCE(SUM(amount), 0) FROM ledger_entries WHERE society_id = " . $pdo->quote($activeSocId) . " AND entry_type = 'INCOME'")->fetchColumn();
+            $approvedExpenses = (float)$pdo->query("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE society_id = " . $pdo->quote($activeSocId) . " AND status = 'APPROVED'")->fetchColumn();
+            $totalBilledReceivables = (float)$pdo->query("SELECT COALESCE(SUM(total_amount), 0) FROM member_bills WHERE society_id = " . $pdo->quote($activeSocId) . " AND status NOT IN ('CANCELLED', 'DRAFT')")->fetchColumn();
+            $outstandingReceivables = (float)$pdo->query("SELECT COALESCE(SUM(balance_amount), 0) FROM member_bills WHERE society_id = " . $pdo->quote($activeSocId) . " AND status NOT IN ('PAID', 'CANCELLED', 'DRAFT')")->fetchColumn();
+
+            $cashAcc = $pdo->query("SELECT current_balance FROM financial_accounts WHERE society_id = " . $pdo->quote($activeSocId) . " AND account_type = 'CASH' LIMIT 1")->fetch();
+            $bankAcc = $pdo->query("SELECT current_balance FROM financial_accounts WHERE society_id = " . $pdo->quote($activeSocId) . " AND account_type = 'BANK' LIMIT 1")->fetch();
+            $cashBalance = $cashAcc ? (float)$cashAcc['current_balance'] : 0.0;
+            $bankBalance = $bankAcc ? (float)$bankAcc['current_balance'] : 0.0;
         } catch (\Throwable $e) {}
     }
     http_response_code(200);
@@ -2175,13 +2265,13 @@ if ($cleanPath === '/api/society/reports' && $method === 'GET') {
         'ledger' => $entries,
         'flatStatements' => [],
         'summary' => [
-            'realizedIncome' => 125000,
-            'approvedExpenses' => 45000,
-            'netSurplusOrDeficit' => 80000,
-            'totalBilledReceivables' => 150000,
-            'outstandingReceivables' => 25000,
-            'bankBalance' => 95000,
-            'cashBalance' => 15000,
+            'realizedIncome' => $realizedIncome,
+            'approvedExpenses' => $approvedExpenses,
+            'netSurplusOrDeficit' => ($realizedIncome - $approvedExpenses),
+            'totalBilledReceivables' => $totalBilledReceivables,
+            'outstandingReceivables' => $outstandingReceivables,
+            'bankBalance' => $bankBalance,
+            'cashBalance' => $cashBalance,
         ]
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     exit;
