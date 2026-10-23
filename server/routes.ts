@@ -1938,6 +1938,7 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           invoiceEmailTemplate ?? null,
           overdueEmailTemplate ?? null
         );
+        syncToMysqlAfterWrite();
         logAudit({
           actorUserId: auth.userId,
           actorRole: 'SUPER_ADMIN',
@@ -1946,6 +1947,49 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           entityId: 'default',
         });
         return sendJson(res, 200, { message: 'Platform settings and payment gateway credentials updated.' });
+      }
+
+      const approveMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/approve$/);
+      if (approveMatch && method === 'POST') {
+        const subPayId = approveMatch[1];
+        const sp = db.prepare('SELECT * FROM subscription_payments WHERE id = ?').get(subPayId) as Record<string, any> | undefined;
+        if (!sp) return sendJson(res, 404, { error: 'Subscription payment not found.' });
+
+        const plan = db.prepare('SELECT * FROM subscription_plans WHERE id = ?').get(sp.plan_id) as Record<string, any> | undefined;
+        const durationDays = Number(plan?.duration_days || 30);
+        const startsAt = new Date().toISOString();
+        const endsAt = new Date(Date.now() + durationDays * 86400_000).toISOString();
+
+        db.prepare(`
+          UPDATE subscription_payments
+          SET status = 'PAID', paid_at = datetime('now'), verified_by_user_id = ?
+          WHERE id = ?
+        `).run(auth.userId, subPayId);
+
+        db.prepare(`
+          UPDATE societies
+          SET subscription_plan_id = ?,
+              subscription_status = 'ACTIVE',
+              approval_status = 'APPROVED',
+              payment_status = 'PAID',
+              subscription_starts_at = ?,
+              subscription_ends_at = ?,
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(sp.plan_id, startsAt, endsAt, sp.society_id);
+
+        syncToMysqlAfterWrite();
+
+        logAudit({
+          societyId: sp.society_id,
+          actorUserId: auth.userId,
+          actorRole: 'SUPER_ADMIN',
+          action: 'SUBSCRIPTION_PAYMENT_APPROVED',
+          entityType: 'SUBSCRIPTION_PAYMENT',
+          entityId: subPayId,
+        });
+
+        return sendJson(res, 200, { message: 'Subscription payment verified and approved. Society is now Active & Approved.' });
       }
 
       const refundMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/refund$/);
@@ -2109,6 +2153,7 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           ORDER BY created_at DESC LIMIT 100
         `).all(societyId, auth.userId) as Record<string, any>[];
 
+        const platform = db.prepare('SELECT * FROM platform_settings LIMIT 1').get() as Record<string, any> | undefined;
         const subscriptionSummary = {
           planId: society?.subscription_plan_id || 'plan_growth',
           planName: society?.plan_name || 'Growth Society',
@@ -2125,6 +2170,11 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           expiryDate,
           daysRemaining,
           pendingInvoice: pendingInvoice || null,
+          platformUpiId: platform?.upi_id || '',
+          platformUpiPayeeName: platform?.upi_payee_name || 'SocietyOS Platform',
+          platformBankName: platform?.bank_name || '',
+          platformBankAccountNumber: platform?.bank_account_number || '',
+          platformBankIfsc: platform?.bank_ifsc || '',
         };
 
         return sendJson(res, 200, {
@@ -2175,6 +2225,43 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           ORDER BY created_at DESC LIMIT 150
         `).all(societyId, auth.userId);
         return sendJson(res, 200, { notifications });
+      }
+
+      if (pathname === '/api/society/subscription/submit-upi' && method === 'POST') {
+        const { utr, transactionReference, planId, amount } = body;
+        const ref = String(utr || transactionReference || '').trim();
+        if (!ref) {
+          return sendJson(res, 400, { error: 'UPI transaction reference / UTR is required.' });
+        }
+
+        const soc = db.prepare('SELECT * FROM societies WHERE id = ?').get(societyId) as Record<string, any> | undefined;
+        const targetPlanId = planId || soc?.subscription_plan_id || 'plan-quarterly-growth';
+        const plan = db.prepare('SELECT * FROM subscription_plans WHERE id = ?').get(targetPlanId) as Record<string, any> | undefined;
+
+        const basePrice = Number(plan?.price_amount || 5499);
+        const taxPct = Number(plan?.tax_percent || 18);
+        const taxAmt = Number(((basePrice * taxPct) / 100).toFixed(2));
+        const totalAmt = Number(amount) > 0 ? Number(amount) : Number((basePrice + taxAmt).toFixed(2));
+
+        const subPayId = uuid();
+        const invNo = `SUB-INV-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+        db.prepare(`
+          INSERT INTO subscription_payments (
+            id, society_id, plan_id, invoice_number, amount, tax_amount, total_amount,
+            payment_gateway, gateway_order_id, gateway_payment_id, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPI', 'UPI_DIRECT_TRANSFER', ?, 'PENDING_APPROVAL', datetime('now'))
+        `).run(subPayId, societyId, targetPlanId, invNo, basePrice, taxAmt, totalAmt, ref);
+
+        db.prepare("UPDATE societies SET payment_status = 'PENDING_APPROVAL', updated_at = datetime('now') WHERE id = ?").run(societyId);
+
+        syncToMysqlAfterWrite();
+
+        return sendJson(res, 201, {
+          id: subPayId,
+          invoiceNumber: invNo,
+          message: 'UPI payment reference submitted successfully. Super Admin will verify and activate your subscription.',
+        });
       }
 
       // 5.2 MEMBERS, HOUSEHOLDS & BLOCKS (Section 5)

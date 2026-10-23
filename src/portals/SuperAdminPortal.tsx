@@ -612,6 +612,26 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         </td>
                         <td>{(sp.paid_at || sp.created_at || '').slice(0, 10)}</td>
                         <td>
+                          {(sp.status === 'CREATED' || sp.status === 'PENDING_APPROVAL') && (
+                            <button
+                              type="button"
+                              className="btn btn-success btn-sm"
+                              onClick={async () => {
+                                if (!window.confirm(`Approve subscription payment of ${formatCurrency(sp.total_amount)} for ${sp.society_name} and activate subscription?`)) return;
+                                try {
+                                  const res = await apiFetch(`/api/super-admin/subscription-payments/${sp.id}/approve`, {
+                                    method: 'POST',
+                                  });
+                                  notify(res.message);
+                                  loadDashboard();
+                                } catch (err: any) {
+                                  notify(err.message, 'error');
+                                }
+                              }}
+                            >
+                              Approve & Activate
+                            </button>
+                          )}
                           {sp.status === 'PAID' && (
                             <button
                               type="button"

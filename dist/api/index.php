@@ -566,6 +566,254 @@ if (preg_match('#^/api/super-admin/societies/([^/]+)$#', $cleanPath, $matches)) 
     }
 }
 
+// 3.8b SUPER ADMIN PLATFORM SETTINGS (GET & PUT)
+if ($cleanPath === '/api/super-admin/settings') {
+    if ($method === 'GET') {
+        $settings = null;
+        if ($pdo) {
+            try {
+                $settings = $pdo->query("SELECT * FROM platform_settings LIMIT 1")->fetch() ?: null;
+            } catch (\Throwable $e) {}
+        }
+        http_response_code(200);
+        echo json_encode($settings ?: [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+
+    if ($method === 'PUT' || $method === 'POST') {
+        if ($pdo) {
+            try {
+                $platformName = $reqData['platformName'] ?? null;
+                $supportEmail = $reqData['supportEmail'] ?? null;
+                $supportPhone = $reqData['supportPhone'] ?? null;
+                $defaultTrialEnabled = isset($reqData['defaultTrialEnabled']) ? ($reqData['defaultTrialEnabled'] ? 1 : 0) : null;
+                $defaultTrialDays = isset($reqData['defaultTrialDays']) ? (int)$reqData['defaultTrialDays'] : null;
+                $defaultGracePeriodDays = isset($reqData['defaultGracePeriodDays']) ? (int)$reqData['defaultGracePeriodDays'] : null;
+                $autoApprovePaid = isset($reqData['autoApprovePaidSocieties']) ? ($reqData['autoApprovePaidSocieties'] ? 1 : 0) : null;
+                $autoApproveTrial = isset($reqData['autoApproveTrialSocieties']) ? ($reqData['autoApproveTrialSocieties'] ? 1 : 0) : null;
+                $razorpayKeyId = $reqData['razorpayKeyId'] ?? null;
+                $upiId = $reqData['upiId'] ?? null;
+                $upiPayeeName = $reqData['upiPayeeName'] ?? null;
+                $bankName = $reqData['bankName'] ?? null;
+                $bankAccountNumber = $reqData['bankAccountNumber'] ?? null;
+                $bankIfsc = $reqData['bankIfsc'] ?? null;
+                $razorpaySandboxMode = isset($reqData['razorpaySandboxMode']) ? ($reqData['razorpaySandboxMode'] ? 1 : 0) : null;
+                $welcomeEmailTemplate = $reqData['welcomeEmailTemplate'] ?? null;
+
+                $existing = $pdo->query("SELECT id FROM platform_settings LIMIT 1")->fetch();
+                if (!$existing) {
+                    $ins = $pdo->prepare("
+                        INSERT INTO platform_settings (
+                            id, platform_name, support_email, support_phone, default_trial_enabled,
+                            default_trial_days, default_grace_period_days, auto_approve_paid_societies,
+                            auto_approve_trial_societies, razorpay_key_id, razorpay_sandbox_mode,
+                            welcome_email_template, invoice_email_template, overdue_email_template,
+                            upi_id, upi_payee_name, bank_name, bank_account_number, bank_ifsc, updated_at
+                        ) VALUES (
+                            'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Invoice Template', 'Overdue Template',
+                            ?, ?, ?, ?, ?, NOW()
+                        )
+                    ");
+                    $ins->execute([
+                        $platformName ?: 'SocietyOS SaaS',
+                        $supportEmail ?: 'admin@societyos.com',
+                        $supportPhone ?: '',
+                        $defaultTrialEnabled ?? 1,
+                        $defaultTrialDays ?? 14,
+                        $defaultGracePeriodDays ?? 7,
+                        $autoApprovePaid ?? 1,
+                        $autoApproveTrial ?? 1,
+                        $razorpayKeyId ?: '',
+                        $razorpaySandboxMode ?? 1,
+                        $welcomeEmailTemplate ?: '',
+                        $upiId ?: '',
+                        $upiPayeeName ?: '',
+                        $bankName ?: '',
+                        $bankAccountNumber ?: '',
+                        $bankIfsc ?: ''
+                    ]);
+                } else {
+                    $rowId = $existing['id'];
+                    $upd = $pdo->prepare("
+                        UPDATE platform_settings
+                        SET platform_name = COALESCE(?, platform_name),
+                            support_email = COALESCE(?, support_email),
+                            support_phone = COALESCE(?, support_phone),
+                            default_trial_enabled = COALESCE(?, default_trial_enabled),
+                            default_trial_days = COALESCE(?, default_trial_days),
+                            default_grace_period_days = COALESCE(?, default_grace_period_days),
+                            auto_approve_paid_societies = COALESCE(?, auto_approve_paid_societies),
+                            auto_approve_trial_societies = COALESCE(?, auto_approve_trial_societies),
+                            razorpay_key_id = COALESCE(?, razorpay_key_id),
+                            upi_id = COALESCE(?, upi_id),
+                            upi_payee_name = COALESCE(?, upi_payee_name),
+                            bank_name = COALESCE(?, bank_name),
+                            bank_account_number = COALESCE(?, bank_account_number),
+                            bank_ifsc = COALESCE(?, bank_ifsc),
+                            razorpay_sandbox_mode = COALESCE(?, razorpay_sandbox_mode),
+                            welcome_email_template = COALESCE(?, welcome_email_template),
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $upd->execute([
+                        $platformName,
+                        $supportEmail,
+                        $supportPhone,
+                        $defaultTrialEnabled,
+                        $defaultTrialDays,
+                        $defaultGracePeriodDays,
+                        $autoApprovePaid,
+                        $autoApproveTrial,
+                        $razorpayKeyId,
+                        $upiId,
+                        $upiPayeeName,
+                        $bankName,
+                        $bankAccountNumber,
+                        $bankIfsc,
+                        $razorpaySandboxMode,
+                        $welcomeEmailTemplate,
+                        $rowId
+                    ]);
+                }
+            } catch (\Throwable $e) {}
+        }
+        http_response_code(200);
+        echo json_encode(['message' => 'Platform settings and payment gateway credentials updated successfully.']);
+        exit;
+    }
+}
+
+// 3.8c SUPER ADMIN SUBSCRIPTION PAYMENTS (APPROVE & REFUND)
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/approve$#', $cleanPath, $m) && $method === 'POST') {
+    $subPayId = $m[1];
+    if ($pdo) {
+        try {
+            $sp = $pdo->prepare("SELECT * FROM subscription_payments WHERE id = ? LIMIT 1");
+            $sp->execute([$subPayId]);
+            $pay = $sp->fetch();
+            if ($pay) {
+                $socId = $pay['society_id'];
+                $planId = $pay['plan_id'];
+                $now = date('Y-m-d H:i:s');
+                
+                $plan = $pdo->prepare("SELECT duration_days FROM subscription_plans WHERE id = ? LIMIT 1");
+                $plan->execute([$planId]);
+                $days = (int)($plan->fetchColumn() ?: 30);
+                $endsAt = date('Y-m-d H:i:s', time() + ($days * 86400));
+
+                $pdo->prepare("
+                    UPDATE subscription_payments
+                    SET status = 'PAID', paid_at = ?, verified_by_user_id = ?
+                    WHERE id = ?
+                ")->execute([$now, $auth['userId'] ?? 'super_admin', $subPayId]);
+
+                $pdo->prepare("
+                    UPDATE societies
+                    SET subscription_plan_id = ?,
+                        subscription_status = 'ACTIVE',
+                        approval_status = 'APPROVED',
+                        payment_status = 'PAID',
+                        subscription_starts_at = ?,
+                        subscription_ends_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                ")->execute([$planId, $now, $endsAt, $now, $socId]);
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Subscription payment verified and approved. Society is now Active & Approved.']);
+    exit;
+}
+
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/refund$#', $cleanPath, $m) && $method === 'POST') {
+    $subPayId = $m[1];
+    $reason = trim($reqData['reason'] ?? 'Refund approved by Super Admin');
+    if ($pdo) {
+        try {
+            $sp = $pdo->prepare("SELECT * FROM subscription_payments WHERE id = ? LIMIT 1");
+            $sp->execute([$subPayId]);
+            $pay = $sp->fetch();
+            if ($pay) {
+                $pdo->prepare("UPDATE subscription_payments SET status = 'REFUNDED', refund_reason = ? WHERE id = ?")->execute([$reason, $subPayId]);
+                $pdo->prepare("UPDATE societies SET payment_status = 'REFUNDED', updated_at = NOW() WHERE id = ?")->execute([$pay['society_id']]);
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Subscription payment marked as refunded.']);
+    exit;
+}
+
+// 3.8d SOCIETY SUBMIT UPI SUBSCRIPTION PAYMENT
+if ($cleanPath === '/api/society/subscription/submit-upi' && $method === 'POST') {
+    $utr = trim($reqData['utr'] ?? $reqData['transactionReference'] ?? '');
+    $planId = $reqData['planId'] ?? null;
+    $amount = floatval($reqData['amount'] ?? 0);
+
+    if (empty($utr)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'UPI transaction reference / UTR is required.']);
+        exit;
+    }
+
+    if ($pdo && !empty($activeSocId)) {
+        try {
+            $soc = $pdo->prepare("SELECT * FROM societies WHERE id = ? LIMIT 1");
+            $soc->execute([$activeSocId]);
+            $society = $soc->fetch();
+
+            $targetPlanId = $planId ?: ($society['subscription_plan_id'] ?? 'plan-quarterly-growth');
+            $plan = $pdo->prepare("SELECT * FROM subscription_plans WHERE id = ? LIMIT 1");
+            $plan->execute([$targetPlanId]);
+            $planRow = $plan->fetch();
+
+            $basePrice = $planRow ? (float)$planRow['price_amount'] : 5499.0;
+            $taxPct = $planRow ? (float)$planRow['tax_percent'] : 18.0;
+            $taxAmt = round(($basePrice * $taxPct) / 100, 2);
+            $totalAmt = $amount > 0 ? $amount : round($basePrice + $taxAmt, 2);
+
+            $subPayId = uuid_v4();
+            $invNo = sprintf('SUB-INV-%s-%05d', date('Y'), rand(10000, 99999));
+
+            $ins = $pdo->prepare("
+                INSERT INTO subscription_payments (
+                    id, society_id, plan_id, invoice_number, amount, tax_amount, total_amount,
+                    payment_gateway, gateway_order_id, gateway_payment_id, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPI', ?, ?, 'PENDING_APPROVAL', NOW())
+            ");
+            $ins->execute([
+                $subPayId,
+                $activeSocId,
+                $targetPlanId,
+                $invNo,
+                $basePrice,
+                $taxAmt,
+                $totalAmt,
+                'UPI_DIRECT_TRANSFER',
+                $utr
+            ]);
+
+            $pdo->prepare("UPDATE societies SET payment_status = 'PENDING_APPROVAL', updated_at = NOW() WHERE id = ?")->execute([$activeSocId]);
+
+            http_response_code(201);
+            echo json_encode([
+                'id' => $subPayId,
+                'invoiceNumber' => $invNo,
+                'message' => 'UPI payment reference submitted successfully. Super Admin will verify and activate your subscription.'
+            ]);
+            exit;
+        } catch (\Throwable $e) {
+            http_response_code(500);
+            echo json_encode(['error' => 'Failed to submit UPI payment: ' . $e->getMessage()]);
+            exit;
+        }
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Payment reference submitted.']);
+    exit;
+}
+
 // 3.9 PUBLIC REGISTER SOCIETY
 if ($cleanPath === '/api/public/register-society' && $method === 'POST') {
     $adminName = trim($reqData['adminName'] ?? '');
@@ -1133,6 +1381,12 @@ if ($cleanPath === '/api/society/dashboard' && $method === 'GET') {
     $subStatus = 'TRIAL';
     $daysRemaining = 14;
     $totalAmountDue = 0.0;
+    $platformSettings = null;
+    if ($pdo) {
+        try {
+            $platformSettings = $pdo->query("SELECT * FROM platform_settings LIMIT 1")->fetch() ?: null;
+        } catch (\Throwable $e) {}
+    }
 
     if ($pdo && !empty($activeSocId)) {
         try {
@@ -1198,6 +1452,11 @@ if ($cleanPath === '/api/society/dashboard' && $method === 'GET') {
             'subscriptionStatus' => $subStatus,
             'daysRemaining' => $daysRemaining,
             'totalAmountDue' => $totalAmountDue,
+            'platformUpiId' => $platformSettings['upi_id'] ?? '',
+            'platformUpiPayeeName' => $platformSettings['upi_payee_name'] ?? 'SocietyOS Platform',
+            'platformBankName' => $platformSettings['bank_name'] ?? '',
+            'platformBankAccountNumber' => $platformSettings['bank_account_number'] ?? '',
+            'platformBankIfsc' => $platformSettings['bank_ifsc'] ?? '',
         ],
         'superAdminNotifications' => [],
         'allSocietyNotifications' => [],

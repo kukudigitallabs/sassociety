@@ -29,6 +29,7 @@ import {
   Clock,
   Menu,
   X,
+  QrCode,
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, downloadCsv, openRazorpayCheckout } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
@@ -141,7 +142,9 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     | 'ADD_EXPENSE_CAT'
     | 'ADD_EXPENSE'
     | 'RENEW_SUBSCRIPTION'
+    | 'PAY_SUBSCRIPTION_UPI'
   >('NONE');
+  const [subUpiForm, setSubUpiForm] = useState({ utr: '', notes: '' });
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
   const [transferHousehold, setTransferHousehold] = useState<any | null>(null);
@@ -852,6 +855,13 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       </div>
 
                       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setModal('PAY_SUBSCRIPTION_UPI')}
+                        >
+                          <QrCode size={15} /> Pay via UPI / Bank Transfer
+                        </button>
                         <button
                           type="button"
                           className="btn btn-secondary"
@@ -4356,6 +4366,113 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Post Expense to Ledger</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PAY SUBSCRIPTION VIA UPI / BANK TRANSFER */}
+      {modal === 'PAY_SUBSCRIPTION_UPI' && (
+        <div className="modal-backdrop" onClick={() => setModal('NONE')}>
+          <div className="modal-card" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3>Pay Subscription via UPI / Bank Transfer</h3>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setModal('NONE')}>✕</button>
+            </div>
+
+            <div style={{ marginTop: '1rem', background: 'var(--bg-subtle)', padding: '1rem', borderRadius: 8, border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Amount Payable (incl. GST)</div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--brand)' }}>
+                {formatCurrency(dashData?.subscriptionSummary?.totalAmountDue || currentSociety.total_amount_due || 6488.82)}
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                Plan: {dashData?.subscriptionSummary?.planName || currentSociety.plan_name || 'Standard Plan'}
+              </div>
+            </div>
+
+            <div style={{ marginTop: '1rem', display: 'grid', gap: '0.75rem' }}>
+              <div style={{ padding: '0.85rem', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-surface)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <div>
+                    <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Super Admin Platform UPI ID</span>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'monospace', color: 'var(--primary)', marginTop: 2 }}>
+                      {dashData?.subscriptionSummary?.platformUpiId || 'societyos@icici'}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Payee: {dashData?.subscriptionSummary?.platformUpiPayeeName || 'SocietyOS Platform'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText(dashData?.subscriptionSummary?.platformUpiId || 'societyos@icici');
+                      notify('Platform UPI ID copied to clipboard!');
+                    }}
+                  >
+                    Copy UPI ID
+                  </button>
+                </div>
+              </div>
+
+              {(dashData?.subscriptionSummary?.platformBankName || dashData?.subscriptionSummary?.platformBankAccountNumber) && (
+                <div style={{ padding: '0.85rem', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-surface)', fontSize: '0.82rem', display: 'grid', gap: 2 }}>
+                  <strong style={{ fontSize: '0.85rem' }}>Platform Bank Account Details (NEFT / IMPS / RTGS):</strong>
+                  <div>Bank Name: {dashData?.subscriptionSummary?.platformBankName}</div>
+                  <div>Account Number: <code>{dashData?.subscriptionSummary?.platformBankAccountNumber}</code></div>
+                  <div>IFSC Code: <code>{dashData?.subscriptionSummary?.platformBankIfsc}</code></div>
+                </div>
+              )}
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                try {
+                  const res = await apiFetch('/api/society/subscription/submit-upi', {
+                    method: 'POST',
+                    body: {
+                      utr: subUpiForm.utr.trim(),
+                      notes: subUpiForm.notes.trim(),
+                      amount: dashData?.subscriptionSummary?.totalAmountDue,
+                      planId: dashData?.subscriptionSummary?.planId,
+                    },
+                  });
+                  notify(res.message);
+                  setSubUpiForm({ utr: '', notes: '' });
+                  setModal('NONE');
+                  refreshCurrentTab();
+                } catch (err: any) {
+                  notify(err.message, 'error');
+                }
+              }}
+              style={{ display: 'grid', gap: '0.9rem', marginTop: '1.25rem' }}
+            >
+              <div className="form-group">
+                <label>UPI Transaction ID / UTR Number *</label>
+                <input
+                  type="text"
+                  required
+                  className="input"
+                  placeholder="e.g., 425188992011 (12-digit UTR from GPay / PhonePe / Paytm / Bank)"
+                  value={subUpiForm.utr}
+                  onChange={(e) => setSubUpiForm({ ...subUpiForm, utr: e.target.value })}
+                />
+              </div>
+              <div className="form-group">
+                <label>Payer Details / Remarks (Optional)</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g., Paid by President from society account"
+                  value={subUpiForm.notes}
+                  onChange={(e) => setSubUpiForm({ ...subUpiForm, notes: e.target.value })}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Cancel</button>
+                <button type="submit" className="btn btn-primary">Submit UPI Payment Reference</button>
               </div>
             </form>
           </div>
