@@ -21,6 +21,8 @@ import {
   Sun,
   PanelLeftClose,
   PanelLeftOpen,
+  Menu,
+  X,
 } from 'lucide-react';
 import { apiFetch, downloadCsv } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
@@ -46,6 +48,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'SOCIETIES' | 'PLANS' | 'PAYMENTS' | 'SETTINGS' | 'AUDIT'>('DASHBOARD');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -145,11 +148,14 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
   return (
     <div className="app-shell">
+      {/* Mobile Drawer Backdrop Overlay */}
+      {mobileMenuOpen && <div className="sidebar-backdrop" onClick={() => setMobileMenuOpen(false)} />}
+
       {/* Sidebar */}
-      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: '#4f46e5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: '#4f46e5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
               <Shield size={19} />
             </div>
             {!sidebarCollapsed && (
@@ -159,38 +165,49 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               </div>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-            title="Toggle Sidebar"
-          >
-            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              title="Toggle Sidebar"
+              className="no-mobile"
+            >
+              {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+            <button
+              type="button"
+              className="mobile-close-btn"
+              onClick={() => setMobileMenuOpen(false)}
+              title="Close Menu"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <nav className="sidebar-nav">
-          <button type="button" className={`nav-item ${activeTab === 'DASHBOARD' ? 'active' : ''}`} onClick={() => setActiveTab('DASHBOARD')}>
+          <button type="button" className={`nav-item ${activeTab === 'DASHBOARD' ? 'active' : ''}`} onClick={() => { setActiveTab('DASHBOARD'); setMobileMenuOpen(false); }}>
             <Shield size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'dashboard')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'SOCIETIES' ? 'active' : ''}`} onClick={() => setActiveTab('SOCIETIES')}>
+          <button type="button" className={`nav-item ${activeTab === 'SOCIETIES' ? 'active' : ''}`} onClick={() => { setActiveTab('SOCIETIES'); setMobileMenuOpen(false); }}>
             <Building2 size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'societies')} ({societies.length})</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'PLANS' ? 'active' : ''}`} onClick={() => setActiveTab('PLANS')}>
+          <button type="button" className={`nav-item ${activeTab === 'PLANS' ? 'active' : ''}`} onClick={() => { setActiveTab('PLANS'); setMobileMenuOpen(false); }}>
             <CreditCard size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'subscriptions')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'PAYMENTS' ? 'active' : ''}`} onClick={() => setActiveTab('PAYMENTS')}>
+          <button type="button" className={`nav-item ${activeTab === 'PAYMENTS' ? 'active' : ''}`} onClick={() => { setActiveTab('PAYMENTS'); setMobileMenuOpen(false); }}>
             <FileText size={18} />
             {!sidebarCollapsed && <span>Subscription Invoices</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'SETTINGS' ? 'active' : ''}`} onClick={() => setActiveTab('SETTINGS')}>
+          <button type="button" className={`nav-item ${activeTab === 'SETTINGS' ? 'active' : ''}`} onClick={() => { setActiveTab('SETTINGS'); setMobileMenuOpen(false); }}>
             <Settings size={18} />
             {!sidebarCollapsed && <span>Platform Settings</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'AUDIT' ? 'active' : ''}`} onClick={() => setActiveTab('AUDIT')}>
+          <button type="button" className={`nav-item ${activeTab === 'AUDIT' ? 'active' : ''}`} onClick={() => { setActiveTab('AUDIT'); setMobileMenuOpen(false); }}>
             <FileText size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'auditLogs')}</span>}
           </button>
@@ -200,21 +217,33 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
       {/* Main Content */}
       <div className="main-area">
         <header className="topbar">
-          <div>
-            <h2 style={{ fontSize: '1.1rem' }}>{t(lang, 'superAdminPortal')}</h2>
-            <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-              Signed in as {user?.fullName || user?.email || 'Super Admin'} ({user?.email || 'owner@societyos.com'}) • Strictly Isolated Platform Owner Panel
+          <div className="topbar-header-info">
+            <button
+              type="button"
+              className="mobile-menu-btn"
+              onClick={() => setMobileMenuOpen(true)}
+              title="Open Navigation Menu"
+            >
+              <Menu size={18} />
+            </button>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ fontSize: 'clamp(0.95rem, 2.5vw, 1.1rem)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {t(lang, 'superAdminPortal')}
+              </h2>
+              <div className="topbar-subtitle" style={{ fontSize: '0.74rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                Signed in as {user?.fullName || user?.email || 'Super Admin'} ({user?.email || 'owner@societyos.com'})
+              </div>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={loadDashboard}>
-              <RefreshCw size={14} /> Refresh
+          <div className="topbar-actions">
+            <button type="button" className="btn btn-secondary btn-sm" onClick={loadDashboard} title="Refresh Dashboard">
+              <RefreshCw size={14} /> <span>Refresh</span>
             </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Toggle Light/Dark Theme">
               {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
             </button>
-            <button type="button" className="btn btn-danger btn-sm" onClick={onLogout}>
-              <LogOut size={14} /> {t(lang, 'logout')}
+            <button type="button" className="btn btn-danger btn-sm" onClick={onLogout} title={t(lang, 'logout')}>
+              <LogOut size={14} /> <span>{t(lang, 'logout')}</span>
             </button>
           </div>
         </header>

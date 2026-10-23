@@ -1,3 +1,4 @@
+import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -22028,7 +22029,7 @@ async function pushAllTablesToMysql(conn) {
     await conn.query("SET FOREIGN_KEY_CHECKS = 1;");
   }
 }
-async function syncToMysqlAfterWrite() {
+async function syncToMysqlAfterWrite2() {
   if (!isMysqlEnabled() || !mysqlPool || !mysqlConnected || syncInProgress) {
     return;
   }
@@ -24088,15 +24089,25 @@ async function handleApiRequest(ctx) {
         const blocks = db.prepare("SELECT * FROM apartment_blocks WHERE society_id = ? ORDER BY name ASC").all(societyId);
         return sendJson(res, 200, { members: filtered, households, blocks });
       }
+      if (pathname === "/api/society/blocks" && method === "GET") {
+        const blocks = db.prepare("SELECT * FROM apartment_blocks WHERE society_id = ? ORDER BY name ASC").all(societyId);
+        return sendJson(res, 200, { blocks });
+      }
       if (pathname === "/api/society/blocks" && method === "POST") {
         const { name, totalFloors = 10, description = "" } = body;
-        if (!name) return sendJson(res, 400, { error: "Block name is required." });
+        if (!name || !String(name).trim()) return sendJson(res, 400, { error: "Block name is required." });
+        const blockName = String(name).trim();
+        const existing = db.prepare("SELECT id, name FROM apartment_blocks WHERE society_id = ? AND LOWER(name) = LOWER(?) LIMIT 1").get(societyId, blockName);
+        if (existing) {
+          return sendJson(res, 200, { id: existing.id, name: existing.name, message: "Apartment block already exists." });
+        }
         const id = uuid();
         db.prepare(`
           INSERT INTO apartment_blocks (id, society_id, name, total_floors, description)
           VALUES (?, ?, ?, ?, ?)
-        `).run(id, societyId, String(name).trim(), Number(totalFloors), description);
-        return sendJson(res, 201, { id, message: "Apartment block added." });
+        `).run(id, societyId, blockName, Number(totalFloors), description);
+        syncToMysqlAfterWrite();
+        return sendJson(res, 201, { id, name: blockName, message: "Apartment block added." });
       }
       if (pathname === "/api/society/members" && method === "POST") {
         const {
@@ -26213,7 +26224,7 @@ function runScheduledRemindersJob() {
         });
       }
     }
-    syncToMysqlAfterWrite();
+    syncToMysqlAfterWrite2();
   } catch (err) {
     console.error("[Reminder Job Error]", err);
   }
@@ -26323,7 +26334,7 @@ async function createServer(options = { withVite: true }) {
         const auth = token ? verifyJwt(token) : null;
         await handleApiRequest({ req, res, url, method, body, auth });
         if (method !== "GET" && method !== "HEAD") {
-          syncToMysqlAfterWrite();
+          syncToMysqlAfterWrite2();
         }
       } catch (err) {
         sendJson(res, 400, { error: err?.message || "Bad request" });

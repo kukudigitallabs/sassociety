@@ -27,6 +27,8 @@ import {
   ArrowRightLeft,
   Bell,
   Clock,
+  Menu,
+  X,
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, downloadCsv, openRazorpayCheckout } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
@@ -61,6 +63,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     'DASHBOARD' | 'NOTIFICATIONS' | 'MEMBERS' | 'BILLING' | 'PAYMENTS' | 'MANUAL_PAYMENT' | 'STAFF' | 'COMPLAINTS' | 'EVENTS' | 'ACCOUNTING' | 'SETTINGS'
   >('DASHBOARD');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState<'ALL' | 'UNREAD' | 'READ' | 'SUPER_ADMIN'>('ALL');
   const [selectedNotification, setSelectedNotification] = useState<any | null>(null);
 
@@ -339,19 +342,29 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
           apiFetch('/api/society/complaints'),
           apiFetch('/api/society/staff'),
         ]);
-        setComplaintsData(cmpRes);
-        setStaffData(stRes);
+        setComplaintsData({
+          complaints: Array.isArray(cmpRes?.complaints) ? cmpRes.complaints : [],
+          suggestions: Array.isArray(cmpRes?.suggestions) ? cmpRes.suggestions : [],
+        });
+        setStaffData(stRes || { staff: [], attendance: [] });
       } else if (activeTab === 'EVENTS') {
         const res = await apiFetch('/api/society/events');
-        setEventsData(res);
+        setEventsData({
+          events: Array.isArray(res?.events) ? res.events : [],
+          announcements: Array.isArray(res?.announcements) ? res.announcements : [],
+        });
       } else if (activeTab === 'ACCOUNTING') {
         const [expRes, repRes] = await Promise.all([
           apiFetch('/api/society/expenses'),
           apiFetch(`/api/society/reports?flatNumber=${encodeURIComponent(ledgerFlatFilter)}&category=${encodeURIComponent(ledgerTypeFilter)}`),
         ]);
-        setExpensesData(expRes);
-        setReportsData(repRes);
-        if (expRes.categories?.length > 0 && !newExpenseForm.expenseCategoryId) {
+        setExpensesData({
+          expenses: Array.isArray(expRes?.expenses) ? expRes.expenses : [],
+          categories: Array.isArray(expRes?.categories) ? expRes.categories : [],
+          accounts: Array.isArray(expRes?.accounts) ? expRes.accounts : [],
+        });
+        setReportsData(repRes || {});
+        if (expRes?.categories?.length > 0 && !newExpenseForm.expenseCategoryId) {
           setNewExpenseForm((prev) => ({ ...prev, expenseCategoryId: expRes.categories[0].id }));
         }
       } else if (activeTab === 'SETTINGS') {
@@ -367,19 +380,41 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     refreshCurrentTab();
   }, [activeTab, memberBlockFilter, billMonthFilter, billStatusFilter, paymentStatusFilter, ledgerTypeFilter]);
 
+  useEffect(() => {
+    apiFetch('/api/society/blocks')
+      .then((res) => {
+        if (res?.blocks?.length) {
+          setMembersData((prev) => ({ ...prev, blocks: res.blocks }));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const currentSociety = dashData?.society || settingsData?.society || initialSociety || {};
   const kpis = dashData?.kpis || {};
   const publicEnrollUrl = `${window.location.origin}/?enroll=${encodeURIComponent(currentSociety.enrollment_code || '')}`;
   const allNotificationsList: any[] = dashData?.allSocietyNotifications || dashData?.superAdminNotifications || [];
   const unreadNotificationsCount = allNotificationsList.filter((n) => !n.is_read).length;
 
+  const availableBlocks = Array.from(
+    new Set([
+      ...(membersData.blocks || []).map((b: any) => b.name),
+      ...(membersData.households || []).map((h: any) => h.block_name).filter(Boolean),
+      newMemberForm.blockName,
+      'Block A',
+    ].filter(Boolean))
+  ).sort();
+
   return (
     <div className="app-shell">
+      {/* Mobile Drawer Backdrop Overlay */}
+      {mobileMenuOpen && <div className="sidebar-backdrop" onClick={() => setMobileMenuOpen(false)} />}
+
       {/* Sidebar — Strictly Society Admin & Staff Only (Zero Super Admin Controls) */}
-      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, flexShrink: 0 }}>
               {(currentSociety.name || 'S').slice(0, 1)}
             </div>
             {!sidebarCollapsed && (
@@ -393,24 +428,36 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               </div>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-          >
-            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              title="Toggle Sidebar"
+              className="no-mobile"
+            >
+              {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+            <button
+              type="button"
+              className="mobile-close-btn"
+              onClick={() => setMobileMenuOpen(false)}
+              title="Close Menu"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <nav className="sidebar-nav">
-          <button type="button" className={`nav-item ${activeTab === 'DASHBOARD' ? 'active' : ''}`} onClick={() => setActiveTab('DASHBOARD')}>
+          <button type="button" className={`nav-item ${activeTab === 'DASHBOARD' ? 'active' : ''}`} onClick={() => { setActiveTab('DASHBOARD'); setMobileMenuOpen(false); }}>
             <LayoutDashboard size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'dashboard')}</span>}
           </button>
           <button
             type="button"
             className={`nav-item ${activeTab === 'NOTIFICATIONS' ? 'active' : ''}`}
-            onClick={() => setActiveTab('NOTIFICATIONS')}
+            onClick={() => { setActiveTab('NOTIFICATIONS'); setMobileMenuOpen(false); }}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -433,45 +480,45 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             )}
           </button>
           {can('view_members') && (
-            <button type="button" className={`nav-item ${activeTab === 'MEMBERS' ? 'active' : ''}`} onClick={() => setActiveTab('MEMBERS')}>
+            <button type="button" className={`nav-item ${activeTab === 'MEMBERS' ? 'active' : ''}`} onClick={() => { setActiveTab('MEMBERS'); setMobileMenuOpen(false); }}>
               <Users size={18} />
               {!sidebarCollapsed && <span>{t(lang, 'members')}</span>}
             </button>
           )}
-          <button type="button" className={`nav-item ${activeTab === 'BILLING' ? 'active' : ''}`} onClick={() => setActiveTab('BILLING')}>
+          <button type="button" className={`nav-item ${activeTab === 'BILLING' ? 'active' : ''}`} onClick={() => { setActiveTab('BILLING'); setMobileMenuOpen(false); }}>
             <Receipt size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'billing')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'PAYMENTS' ? 'active' : ''}`} onClick={() => setActiveTab('PAYMENTS')}>
+          <button type="button" className={`nav-item ${activeTab === 'PAYMENTS' ? 'active' : ''}`} onClick={() => { setActiveTab('PAYMENTS'); setMobileMenuOpen(false); }}>
             <CreditCard size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'payments')}</span>}
           </button>
           {can('verify_payments') && (
-            <button type="button" className={`nav-item ${activeTab === 'MANUAL_PAYMENT' ? 'active' : ''}`} onClick={() => setActiveTab('MANUAL_PAYMENT')}>
+            <button type="button" className={`nav-item ${activeTab === 'MANUAL_PAYMENT' ? 'active' : ''}`} onClick={() => { setActiveTab('MANUAL_PAYMENT'); setMobileMenuOpen(false); }}>
               <Plus size={18} />
               {!sidebarCollapsed && <span>Receive Payment (Manual)</span>}
             </button>
           )}
-          <button type="button" className={`nav-item ${activeTab === 'STAFF' ? 'active' : ''}`} onClick={() => setActiveTab('STAFF')}>
+          <button type="button" className={`nav-item ${activeTab === 'STAFF' ? 'active' : ''}`} onClick={() => { setActiveTab('STAFF'); setMobileMenuOpen(false); }}>
             <UserCheck size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'staff')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'COMPLAINTS' ? 'active' : ''}`} onClick={() => setActiveTab('COMPLAINTS')}>
+          <button type="button" className={`nav-item ${activeTab === 'COMPLAINTS' ? 'active' : ''}`} onClick={() => { setActiveTab('COMPLAINTS'); setMobileMenuOpen(false); }}>
             <MessageSquareWarning size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'complaints')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'EVENTS' ? 'active' : ''}`} onClick={() => setActiveTab('EVENTS')}>
+          <button type="button" className={`nav-item ${activeTab === 'EVENTS' ? 'active' : ''}`} onClick={() => { setActiveTab('EVENTS'); setMobileMenuOpen(false); }}>
             <CalendarDays size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'events')}</span>}
           </button>
           {can('view_financial_reports') && (
-            <button type="button" className={`nav-item ${activeTab === 'ACCOUNTING' ? 'active' : ''}`} onClick={() => setActiveTab('ACCOUNTING')}>
+            <button type="button" className={`nav-item ${activeTab === 'ACCOUNTING' ? 'active' : ''}`} onClick={() => { setActiveTab('ACCOUNTING'); setMobileMenuOpen(false); }}>
               <Landmark size={18} />
               {!sidebarCollapsed && <span>{t(lang, 'accounting')}</span>}
             </button>
           )}
           {can('change_society_settings') && (
-            <button type="button" className={`nav-item ${activeTab === 'SETTINGS' ? 'active' : ''}`} onClick={() => setActiveTab('SETTINGS')}>
+            <button type="button" className={`nav-item ${activeTab === 'SETTINGS' ? 'active' : ''}`} onClick={() => { setActiveTab('SETTINGS'); setMobileMenuOpen(false); }}>
               <Settings size={18} />
               {!sidebarCollapsed && <span>{t(lang, 'settings')}</span>}
             </button>
@@ -482,25 +529,35 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
       {/* Main Content */}
       <div className="main-area">
         <header className="topbar">
-          <div>
-            <h2 style={{ fontSize: '1.08rem' }}>
-              {currentSociety.name} — {user.role === 'SOCIETY_ADMIN' ? t(lang, 'societyAdminPortal') : t(lang, 'staffPortal')}
-            </h2>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              {user?.fullName || user?.email || 'Admin'} ({user?.email || ''}) • Enrolment Code: <code>{currentSociety.enrollment_code}</code>
-              {Boolean(currentSociety.is_demo) && <span className="badge badge-warning" style={{ marginLeft: 8 }}>Demo Tenant</span>}
+          <div className="topbar-header-info">
+            <button
+              type="button"
+              className="mobile-menu-btn"
+              onClick={() => setMobileMenuOpen(true)}
+              title="Open Navigation Menu"
+            >
+              <Menu size={18} />
+            </button>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ fontSize: 'clamp(0.95rem, 2.5vw, 1.08rem)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {currentSociety.name} — {user.role === 'SOCIETY_ADMIN' ? t(lang, 'societyAdminPortal') : t(lang, 'staffPortal')}
+              </h2>
+              <div className="topbar-subtitle" style={{ fontSize: '0.74rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {user?.fullName || user?.email || 'Admin'} ({user?.email || ''}) • Code: <code>{currentSociety.enrollment_code}</code>
+                {Boolean(currentSociety.is_demo) && <span className="badge badge-warning" style={{ marginLeft: 6 }}>Demo</span>}
+              </div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={refreshCurrentTab}>
-              <RefreshCw size={14} /> Refresh
+          <div className="topbar-actions">
+            <button type="button" className="btn btn-secondary btn-sm" onClick={refreshCurrentTab} title="Refresh Data">
+              <RefreshCw size={14} /> <span>Refresh</span>
             </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Toggle Light/Dark Theme">
               {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
             </button>
-            <button type="button" className="btn btn-danger btn-sm" onClick={onLogout}>
-              <LogOut size={14} /> {t(lang, 'logout')}
+            <button type="button" className="btn btn-danger btn-sm" onClick={onLogout} title={t(lang, 'logout')}>
+              <LogOut size={14} /> <span>{t(lang, 'logout')}</span>
             </button>
           </div>
         </header>
@@ -622,7 +679,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       <div
                         style={{
                           display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))',
                           gap: '0.75rem',
                         }}
                       >
@@ -850,7 +907,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))',
                         gap: '0.75rem',
                       }}
                     >
@@ -1236,8 +1293,8 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 />
                 <select className="select" value={memberBlockFilter} onChange={(e) => setMemberBlockFilter(e.target.value)}>
                   <option value="">All Blocks / Towers</option>
-                  {membersData.blocks.map((b: any) => (
-                    <option key={b.id} value={b.name}>{b.name}</option>
+                  {availableBlocks.map((bName: string) => (
+                    <option key={bName} value={bName}>{bName}</option>
                   ))}
                 </select>
                 <button type="button" className="btn btn-secondary" onClick={refreshCurrentTab}>Search Records</button>
@@ -2205,7 +2262,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       </tr>
                     </thead>
                     <tbody>
-                      {complaintsData.complaints.map((c: any) => (
+                      {(complaintsData?.complaints || []).map((c: any) => (
                         <tr key={c.id}>
                           <td>
                             <strong>{c.complaint_number}</strong>
@@ -2288,7 +2345,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       </tr>
                     </thead>
                     <tbody>
-                      {complaintsData.suggestions.map((sg: any) => (
+                      {(complaintsData?.suggestions || []).map((sg: any) => (
                         <tr key={sg.id}>
                           <td><strong>{sg.flat_number}</strong> — {sg.member_name}</td>
                           <td>
@@ -2366,7 +2423,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 </form>
 
                 <div style={{ marginTop: '1.5rem', display: 'grid', gap: '0.75rem' }}>
-                  {eventsData.announcements.map((a: any) => (
+                  {(eventsData?.announcements || []).map((a: any) => (
                     <div key={a.id} className="card" style={{ background: 'var(--bg-subtle)', padding: '0.85rem' }}>
                       <span className="badge badge-info">{a.category}</span>
                       <h4 style={{ marginTop: 4 }}>{a.title}</h4>
@@ -2417,7 +2474,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 </form>
 
                 <div style={{ marginTop: '1.5rem', display: 'grid', gap: '0.75rem' }}>
-                  {eventsData.events.map((ev: any) => (
+                  {(eventsData?.events || []).map((ev: any) => (
                     <div key={ev.id} className="card" style={{ background: 'var(--bg-subtle)', padding: '0.85rem' }}>
                       <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--primary)' }}>
                         {ev.event_date} • {ev.event_time} • {ev.venue}
@@ -2503,7 +2560,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       </tr>
                     </thead>
                     <tbody>
-                      {expensesData.expenses.map((ex: any) => (
+                      {(expensesData?.expenses || []).map((ex: any) => (
                         <tr key={ex.id}>
                           <td>{ex.expense_date}</td>
                           <td><strong>{ex.category_name}</strong></td>
@@ -3296,7 +3353,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                     </div>
                   ) : (
                     <div className="table-wrap">
-                      <table>
+                      <table className="data-table">
                         <thead>
                           <tr>
                             <th>Status</th>
@@ -3470,8 +3527,36 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               </div>
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Block *</label>
-                  <input type="text" required className="input" value={newMemberForm.blockName} onChange={(e) => setNewMemberForm({ ...newMemberForm, blockName: e.target.value })} />
+                  <label>Block / Tower *</label>
+                  <div style={{ display: 'flex', gap: '0.45rem' }}>
+                    <select
+                      className="select"
+                      required
+                      value={newMemberForm.blockName}
+                      onChange={(e) => {
+                        if (e.target.value === '__ADD_NEW__') {
+                          setModal('ADD_BLOCK');
+                        } else {
+                          setNewMemberForm({ ...newMemberForm, blockName: e.target.value });
+                        }
+                      }}
+                      style={{ flex: 1 }}
+                    >
+                      {availableBlocks.map((bName: string) => (
+                        <option key={bName} value={bName}>{bName}</option>
+                      ))}
+                      <option value="__ADD_NEW__">+ Add New Block / Tower...</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setModal('ADD_BLOCK')}
+                      title="Add New Block"
+                      style={{ flexShrink: 0 }}
+                    >
+                      <Plus size={14} /> Add
+                    </button>
+                  </div>
                 </div>
                 <div className="form-group">
                   <label>Floor *</label>
@@ -3615,12 +3700,20 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 try {
                   const res = await apiFetch('/api/society/blocks', {
                     method: 'POST',
-                    body: { name: newBlockName },
+                    body: { name: newBlockName.trim() },
                   });
-                  notify(res.message);
+                  notify(res.message || 'Apartment block added successfully.');
+                  const addedName = (res.name || newBlockName).trim();
+                  const newBlockObj = { id: res.id || `blk-${Date.now()}`, name: addedName };
+                  setMembersData((prev) => ({
+                    ...prev,
+                    blocks: [...(prev.blocks || []).filter((b: any) => b.name.toLowerCase() !== addedName.toLowerCase()), newBlockObj].sort((a: any, b: any) => a.name.localeCompare(b.name)),
+                  }));
+                  setNewMemberForm((prev) => ({ ...prev, blockName: addedName }));
                   setNewBlockName('');
-                  setModal('NONE');
-                  refreshCurrentTab();
+                  const wasAddingMember = Boolean(newMemberForm.fullName || newMemberForm.email || newMemberForm.flatNumber);
+                  setModal(wasAddingMember ? 'ADD_MEMBER' : 'NONE');
+                  await refreshCurrentTab();
                 } catch (err: any) {
                   notify(err.message, 'error');
                 }
@@ -3665,6 +3758,18 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               <div className="form-group">
                 <label>Corrected / New Flat Number *</label>
                 <input type="text" required className="input" value={transferForm.newFlatNumber} onChange={(e) => setTransferForm({ ...transferForm, newFlatNumber: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Block / Tower</label>
+                <select
+                  className="select"
+                  value={transferForm.newBlockName || transferHousehold?.block_name || ''}
+                  onChange={(e) => setTransferForm({ ...transferForm, newBlockName: e.target.value })}
+                >
+                  {availableBlocks.map((blk) => (
+                    <option key={blk} value={blk}>{blk}</option>
+                  ))}
+                </select>
               </div>
               <div className="form-group">
                 <label>Audit Reason *</label>
@@ -3784,7 +3889,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
 
               <div className="form-group">
                 <label>Select Charge Categories to Include on Bill *</label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.45rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 200px), 1fr))', gap: '0.45rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8 }}>
                   {chargeCategories.map((c: any) => (
                     <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.84rem' }}>
                       <input
@@ -3904,7 +4009,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
       {modal === 'PRINT_INVOICE' && selectedInvoice && (
         <div className="modal-backdrop" onClick={() => setModal('NONE')}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div style={{ borderBlockEnd: '2px solid var(--primary)', paddingBottom: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ borderBlockEnd: '2px solid var(--primary)', paddingBottom: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
               <div>
                 <h3>{currentSociety.name}</h3>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{currentSociety.address}</div>
@@ -3917,24 +4022,26 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             <div style={{ marginBottom: '1rem', fontSize: '0.88rem' }}>
               <strong>Billed To:</strong> Flat {selectedInvoice.flat_number} ({selectedInvoice.member_name || 'Resident'}) • Due Date: <strong>{selectedInvoice.due_date}</strong>
             </div>
-            <table className="data-table" style={{ marginBottom: '1rem' }}>
-              <thead>
-                <tr>
-                  <th>Charge Head</th>
-                  <th>Description</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(selectedInvoice.items || []).map((it: any) => (
-                  <tr key={it.id}>
-                    <td><strong>{it.category_name}</strong></td>
-                    <td>{it.description}</td>
-                    <td>{formatCurrency(it.amount)}</td>
+            <div className="table-wrap">
+              <table className="data-table" style={{ marginBottom: '1rem' }}>
+                <thead>
+                  <tr>
+                    <th>Charge Head</th>
+                    <th>Description</th>
+                    <th>Amount</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {(selectedInvoice.items || []).map((it: any) => (
+                    <tr key={it.id}>
+                      <td><strong>{it.category_name}</strong></td>
+                      <td>{it.description}</td>
+                      <td>{formatCurrency(it.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <div style={{ textAlign: 'end', fontSize: '1.1rem', fontWeight: 800 }}>
               Total Payable: {formatCurrency(selectedInvoice.total_amount)} (Balance: {formatCurrency(selectedInvoice.balance_amount)})
             </div>

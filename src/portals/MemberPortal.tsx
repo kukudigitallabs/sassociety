@@ -18,6 +18,8 @@ import {
   Clock,
   PanelLeftClose,
   PanelLeftOpen,
+  Menu,
+  X,
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, openRazorpayCheckout } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
@@ -43,6 +45,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'BILLS' | 'COMPLAINTS' | 'PROFILE'>('DASHBOARD');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [data, setData] = useState<any | null>(null);
 
   // Bill filters
@@ -225,10 +228,13 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+      {/* Mobile Drawer Backdrop Overlay */}
+      {mobileMenuOpen && <div className="sidebar-backdrop" onClick={() => setMobileMenuOpen(false)} />}
+
+      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, flexShrink: 0 }}>
               {(member.flat_number || 'R').slice(0, 3)}
             </div>
             {!sidebarCollapsed && (
@@ -238,29 +244,41 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
               </div>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
-          >
-            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              title="Toggle Sidebar"
+              className="no-mobile"
+            >
+              {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+            <button
+              type="button"
+              className="mobile-close-btn"
+              onClick={() => setMobileMenuOpen(false)}
+              title="Close Menu"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <nav className="sidebar-nav">
-          <button type="button" className={`nav-item ${activeTab === 'DASHBOARD' ? 'active' : ''}`} onClick={() => setActiveTab('DASHBOARD')}>
+          <button type="button" className={`nav-item ${activeTab === 'DASHBOARD' ? 'active' : ''}`} onClick={() => { setActiveTab('DASHBOARD'); setMobileMenuOpen(false); }}>
             <Home size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'dashboard')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'BILLS' ? 'active' : ''}`} onClick={() => setActiveTab('BILLS')}>
+          <button type="button" className={`nav-item ${activeTab === 'BILLS' ? 'active' : ''}`} onClick={() => { setActiveTab('BILLS'); setMobileMenuOpen(false); }}>
             <Receipt size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'myBills')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'COMPLAINTS' ? 'active' : ''}`} onClick={() => setActiveTab('COMPLAINTS')}>
+          <button type="button" className={`nav-item ${activeTab === 'COMPLAINTS' ? 'active' : ''}`} onClick={() => { setActiveTab('COMPLAINTS'); setMobileMenuOpen(false); }}>
             <MessageSquarePlus size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'myComplaints')}</span>}
           </button>
-          <button type="button" className={`nav-item ${activeTab === 'PROFILE' ? 'active' : ''}`} onClick={() => setActiveTab('PROFILE')}>
+          <button type="button" className={`nav-item ${activeTab === 'PROFILE' ? 'active' : ''}`} onClick={() => { setActiveTab('PROFILE'); setMobileMenuOpen(false); }}>
             <User size={18} />
             {!sidebarCollapsed && <span>{t(lang, 'myProfile')}</span>}
           </button>
@@ -269,24 +287,34 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
 
       <div className="main-area">
         <header className="topbar">
-          <div>
-            <h2 style={{ fontSize: '1.08rem' }}>
-              {society.name} — {t(lang, 'memberPortal')} (Flat {member.flat_number}, {member.block_name})
-            </h2>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Resident: <strong>{member.full_name}</strong> • RWA Helpdesk: {society.contact_phone} ({society.contact_email})
+          <div className="topbar-header-info">
+            <button
+              type="button"
+              className="mobile-menu-btn"
+              onClick={() => setMobileMenuOpen(true)}
+              title="Open Navigation Menu"
+            >
+              <Menu size={18} />
+            </button>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ fontSize: 'clamp(0.95rem, 2.5vw, 1.08rem)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {society.name} — {t(lang, 'memberPortal')} (Flat {member.flat_number}, {member.block_name})
+              </h2>
+              <div className="topbar-subtitle" style={{ fontSize: '0.74rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                Resident: <strong>{member.full_name}</strong> • Helpdesk: {society.contact_phone}
+              </div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={loadMemberDashboard}>
-              <RefreshCw size={14} /> Refresh
+          <div className="topbar-actions">
+            <button type="button" className="btn btn-secondary btn-sm" onClick={loadMemberDashboard} title="Refresh Dashboard">
+              <RefreshCw size={14} /> <span>Refresh</span>
             </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Toggle Light/Dark Theme">
               {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
             </button>
-            <button type="button" className="btn btn-danger btn-sm" onClick={onLogout}>
-              <LogOut size={14} /> {t(lang, 'logout')}
+            <button type="button" className="btn btn-danger btn-sm" onClick={onLogout} title={t(lang, 'logout')}>
+              <LogOut size={14} /> <span>{t(lang, 'logout')}</span>
             </button>
           </div>
         </header>
@@ -752,7 +780,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
 
           {/* TAB 4: HOUSEHOLD & PERSONAL PROFILE */}
           {activeTab === 'PROFILE' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '1.25rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: '1.25rem' }}>
               <div className="card">
                 <h3>Update My Contact & Emergency Information</h3>
                 <form
@@ -914,24 +942,26 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
             <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
               Flat {member.flat_number} ({member.full_name}) • Billing Period: {selectedBill.billing_month}/{selectedBill.billing_year} • Due: {selectedBill.due_date}
             </p>
-            <table className="data-table" style={{ marginBottom: '1rem' }}>
-              <thead>
-                <tr>
-                  <th>Charge Category</th>
-                  <th>Description</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(selectedBill.items || []).map((it: any) => (
-                  <tr key={it.id}>
-                    <td><strong>{it.category_name}</strong></td>
-                    <td>{it.description}</td>
-                    <td>{formatCurrency(it.amount)}</td>
+            <div className="table-wrap">
+              <table className="data-table" style={{ marginBottom: '1rem' }}>
+                <thead>
+                  <tr>
+                    <th>Charge Category</th>
+                    <th>Description</th>
+                    <th>Amount</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {(selectedBill.items || []).map((it: any) => (
+                    <tr key={it.id}>
+                      <td><strong>{it.category_name}</strong></td>
+                      <td>{it.description}</td>
+                      <td>{formatCurrency(it.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <div style={{ textAlign: 'end', fontWeight: 800, fontSize: '1.1rem' }}>
               Total: {formatCurrency(selectedBill.total_amount)} | Balance Due: {formatCurrency(selectedBill.balance_amount)}
             </div>

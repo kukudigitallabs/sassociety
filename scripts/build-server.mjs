@@ -25,6 +25,9 @@ await esbuild.build({
   bundle: true,
   platform: 'node',
   format: 'esm',
+  banner: {
+    js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
+  },
   external: ['vite', 'fsevents', 'lightningcss'],
   outfile: path.join(outDir, 'server.js'),
   sourcemap: false,

@@ -2389,15 +2389,26 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
         return sendJson(res, 200, { members: filtered, households, blocks });
       }
 
+      if (pathname === '/api/society/blocks' && method === 'GET') {
+        const blocks = db.prepare('SELECT * FROM apartment_blocks WHERE society_id = ? ORDER BY name ASC').all(societyId);
+        return sendJson(res, 200, { blocks });
+      }
+
       if (pathname === '/api/society/blocks' && method === 'POST') {
         const { name, totalFloors = 10, description = '' } = body;
-        if (!name) return sendJson(res, 400, { error: 'Block name is required.' });
+        if (!name || !String(name).trim()) return sendJson(res, 400, { error: 'Block name is required.' });
+        const blockName = String(name).trim();
+        const existing = db.prepare('SELECT id, name FROM apartment_blocks WHERE society_id = ? AND LOWER(name) = LOWER(?) LIMIT 1').get(societyId, blockName) as any;
+        if (existing) {
+          return sendJson(res, 200, { id: existing.id, name: existing.name, message: 'Apartment block already exists.' });
+        }
         const id = uuid();
         db.prepare(`
           INSERT INTO apartment_blocks (id, society_id, name, total_floors, description)
           VALUES (?, ?, ?, ?, ?)
-        `).run(id, societyId, String(name).trim(), Number(totalFloors), description);
-        return sendJson(res, 201, { id, message: 'Apartment block added.' });
+        `).run(id, societyId, blockName, Number(totalFloors), description);
+        syncToMysqlAfterWrite();
+        return sendJson(res, 201, { id, name: blockName, message: 'Apartment block added.' });
       }
 
       if (pathname === '/api/society/members' && method === 'POST') {
