@@ -23,9 +23,27 @@ import {
   PanelLeftOpen,
   Menu,
   X,
+  Upload,
+  Image as ImageIcon,
+  QrCode,
+  Sliders,
+  Sparkles,
+  Eye,
+  Copy,
+  ExternalLink,
+  Check,
+  Percent,
+  FileCheck,
+  AlertTriangle,
+  RotateCcw,
+  Receipt,
+  Printer,
 } from 'lucide-react';
-import { apiFetch, downloadCsv } from '../api.ts';
+import { apiFetch, downloadCsv, uploadFileAsBase64 } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
+import { UpiQrCard } from '../components/UpiQrCard.tsx';
+import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
+import { SubscriptionInvoiceModal } from '../components/SubscriptionInvoiceModal.tsx';
 
 interface SuperAdminPortalProps {
   user: any;
@@ -47,10 +65,18 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   notify,
 }) => {
   const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'SOCIETIES' | 'PLANS' | 'PAYMENTS' | 'SETTINGS' | 'AUDIT'>('DASHBOARD');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth > 1024 && window.innerWidth <= 1280;
+    }
+    return false;
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [selectedReceipt, setSelectedReceipt] = useState<{ url: string; societyName: string; invoiceNo: string; amount: number; utr: string } | null>(null);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -70,6 +96,21 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   const [notifyType, setNotifyType] = useState<'SUBSCRIPTION_PAYMENT_DUE' | 'PLATFORM_NOTICE'>('SUBSCRIPTION_PAYMENT_DUE');
   const [notifyAmountDue, setNotifyAmountDue] = useState('');
   const [notifyDaysPending, setNotifyDaysPending] = useState('');
+
+  // Subscription Invoices & Refund Management State
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<'ALL' | 'PAID' | 'UNPAID' | 'REFUNDED' | 'FAILED'>('ALL');
+  const [paymentSearch, setPaymentSearch] = useState('');
+  const [refundModalPayment, setRefundModalPayment] = useState<any | null>(null);
+  const [refundForm, setRefundForm] = useState({
+    reason: 'Requested by society administrator',
+    customReason: '',
+    refundAmount: '',
+    refundReference: '',
+    refundGateway: 'UPI',
+    refundNotes: '',
+  });
+  const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
+  const [viewingSubInvoice, setViewingSubInvoice] = useState<any | null>(null);
   const [newSocietyForm, setNewSocietyForm] = useState({
     societyName: '',
     adminName: '',
@@ -90,6 +131,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
     durationDays: 30,
     priceAmount: 2499,
     taxPercent: 18,
+    taxName: 'GST',
     maxHouseholds: 200,
     trialEnabled: true,
     trialDays: 14,
@@ -98,8 +140,8 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
   });
   const [settingsForm, setSettingsForm] = useState<any>({});
 
-  async function loadDashboard() {
-    setLoading(true);
+  async function loadDashboard(quiet = false) {
+    if (!quiet) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
@@ -118,7 +160,33 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
     } catch (err: any) {
       notify(err.message, 'error');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
+    }
+  }
+
+  async function handleManualRefresh() {
+    setIsRefreshing(true);
+    try {
+      await loadDashboard(true);
+      notify('Super Admin dashboard & records refreshed successfully.', 'success');
+    } catch (err: any) {
+      notify(err.message || 'Refresh failed', 'error');
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
+
+  async function handleLogoUpload(file: File) {
+    if (!file) return;
+    setIsUploadingLogo(true);
+    try {
+      const url = await uploadFileAsBase64(file);
+      setSettingsForm((prev: any) => ({ ...prev, logo_url: url }));
+      notify('Brand logo uploaded successfully! Click "Save Platform & Gateway Settings" below to apply platform-wide.');
+    } catch (err: any) {
+      notify(err.message || 'Failed to upload logo image', 'error');
+    } finally {
+      setIsUploadingLogo(false);
     }
   }
 
@@ -140,6 +208,81 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
     }
   }
 
+  function openRefundModal(sp: any) {
+    setRefundModalPayment(sp);
+    setRefundForm({
+      reason: sp.refund_reason || 'Requested by society administrator',
+      customReason: '',
+      refundAmount: String(sp.refund_amount || sp.total_amount || ''),
+      refundReference: sp.refund_reference || '',
+      refundGateway: sp.refund_gateway || 'UPI',
+      refundNotes: sp.refund_notes || '',
+    });
+  }
+
+  async function handleConfirmRefund() {
+    if (!refundModalPayment) return;
+    const finalReason = refundForm.reason === 'Other' && refundForm.customReason ? refundForm.customReason : refundForm.reason;
+    if (!finalReason) {
+      notify('Please specify a refund reason.', 'error');
+      return;
+    }
+    const amt = Number(refundForm.refundAmount) || refundModalPayment.total_amount;
+    setIsSubmittingRefund(true);
+    try {
+      const endpoint = refundModalPayment.status === 'REFUNDED'
+        ? `/api/super-admin/subscription-payments/${refundModalPayment.id}/update-refund`
+        : `/api/super-admin/subscription-payments/${refundModalPayment.id}/refund`;
+      const res = await apiFetch(endpoint, {
+        method: 'POST',
+        body: {
+          reason: finalReason,
+          refundAmount: amt,
+          refundReference: refundForm.refundReference,
+          refundGateway: refundForm.refundGateway,
+          refundNotes: refundForm.refundNotes,
+        },
+      });
+      notify(res.message);
+      setRefundModalPayment(null);
+      loadDashboard();
+    } catch (err: any) {
+      notify(err.message, 'error');
+    } finally {
+      setIsSubmittingRefund(false);
+    }
+  }
+
+  async function handleMarkUnpaid(sp: any) {
+    const notes = window.prompt(`Enter note/reason for marking invoice #${sp.invoice_number} as UNPAID:`, 'Subscription payment is pending or dishonored');
+    if (notes === null) return;
+    try {
+      const res = await apiFetch(`/api/super-admin/subscription-payments/${sp.id}/mark-unpaid`, {
+        method: 'POST',
+        body: { notes },
+      });
+      notify(res.message);
+      if (refundModalPayment) setRefundModalPayment(null);
+      loadDashboard();
+    } catch (err: any) {
+      notify(err.message, 'error');
+    }
+  }
+
+  async function handleMarkPaid(sp: any) {
+    if (!window.confirm(`Confirm and mark invoice #${sp.invoice_number} of ${formatCurrency(sp.total_amount)} for ${sp.society_name} as PAID & ACTIVE?`)) return;
+    try {
+      const res = await apiFetch(`/api/super-admin/subscription-payments/${sp.id}/approve`, {
+        method: 'POST',
+      });
+      notify(res.message);
+      if (refundModalPayment) setRefundModalPayment(null);
+      loadDashboard();
+    } catch (err: any) {
+      notify(err.message, 'error');
+    }
+  }
+
   const kpis = data?.kpis || {};
   const societies = data?.societies || [];
   const plans = data?.plans || [];
@@ -154,22 +297,18 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
       {/* Sidebar */}
       <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: '#4f46e5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
-              <Shield size={19} />
-            </div>
-            {!sidebarCollapsed && (
-              <div>
-                <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#fff' }}>Super Admin</div>
-                <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>SaaS Platform Owner</div>
-              </div>
-            )}
-          </div>
+          <ResponsiveLogo
+            logoUrl={settingsForm.logo_url}
+            platformName="Super Admin"
+            defaultIcon={<Shield size={19} />}
+            maxHeight={34}
+            compactOnMobile={sidebarCollapsed}
+          />
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <button
               type="button"
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              style={{ background: 'none', border: 'none', color: 'var(--text-sidebar-muted)', cursor: 'pointer' }}
               title="Toggle Sidebar"
               className="no-mobile"
             >
@@ -236,8 +375,15 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
             </div>
           </div>
           <div className="topbar-actions">
-            <button type="button" className="btn btn-secondary btn-sm" onClick={loadDashboard} title="Refresh Dashboard">
-              <RefreshCw size={14} /> <span>Refresh</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              title="Refresh Dashboard & Metrics"
+            >
+              <RefreshCw size={14} className={isRefreshing ? 'spin-animation' : ''} />
+              <span>{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
             </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title="Toggle Light/Dark Theme">
               {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
@@ -576,97 +722,369 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
             </div>
           )}
 
-          {/* TAB: SUBSCRIPTION INVOICES & REFUNDS */}
-          {activeTab === 'PAYMENTS' && (
-            <div className="card">
-              <h3>Society Subscription Invoices, Webhook Verifications & Refunds</h3>
-              <div className="table-wrap" style={{ marginTop: '1rem' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Invoice #</th>
-                      <th>Society</th>
-                      <th>Plan</th>
-                      <th>Total (incl. GST)</th>
-                      <th>Gateway Order / Payment ID</th>
-                      <th>Status</th>
-                      <th>Date</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {subscriptionPayments.map((sp: any) => (
-                      <tr key={sp.id}>
-                        <td><strong>{sp.invoice_number}</strong></td>
-                        <td>{sp.society_name}</td>
-                        <td>{sp.plan_name}</td>
-                        <td>{formatCurrency(sp.total_amount)}</td>
-                        <td>
-                          <div style={{ fontSize: '0.76rem' }}>Order: <code>{sp.gateway_order_id || 'N/A'}</code></div>
-                          <div style={{ fontSize: '0.76rem' }}>Pay: <code>{sp.gateway_payment_id || 'Pending'}</code></div>
-                        </td>
-                        <td>
-                          <span className={`badge ${sp.status === 'PAID' ? 'badge-success' : sp.status === 'REFUNDED' ? 'badge-danger' : 'badge-warning'}`}>
-                            {sp.status}
-                          </span>
-                        </td>
-                        <td>{(sp.paid_at || sp.created_at || '').slice(0, 10)}</td>
-                        <td>
-                          {(sp.status === 'CREATED' || sp.status === 'PENDING_APPROVAL') && (
-                            <button
-                              type="button"
-                              className="btn btn-success btn-sm"
-                              onClick={async () => {
-                                if (!window.confirm(`Approve subscription payment of ${formatCurrency(sp.total_amount)} for ${sp.society_name} and activate subscription?`)) return;
-                                try {
-                                  const res = await apiFetch(`/api/super-admin/subscription-payments/${sp.id}/approve`, {
-                                    method: 'POST',
-                                  });
-                                  notify(res.message);
-                                  loadDashboard();
-                                } catch (err: any) {
-                                  notify(err.message, 'error');
-                                }
-                              }}
-                            >
-                              Approve & Activate
-                            </button>
-                          )}
-                          {sp.status === 'PAID' && (
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={async () => {
-                                const reason = window.prompt('Enter refund reason for audit log:', 'Requested by society administrator');
-                                if (!reason) return;
-                                try {
-                                  const res = await apiFetch(`/api/super-admin/subscription-payments/${sp.id}/refund`, {
-                                    method: 'POST',
-                                    body: { reason },
-                                  });
-                                  notify(res.message);
-                                  loadDashboard();
-                                } catch (err: any) {
-                                  notify(err.message, 'error');
-                                }
-                              }}
-                            >
-                              Issue Refund
-                            </button>
-                          )}
-                        </td>
-                      </tr>
+          {/* TAB: SUBSCRIPTION INVOICES, PROOF VERIFICATIONS & REFUNDS */}
+          {activeTab === 'PAYMENTS' && (() => {
+            const totalInvoicedAmount = subscriptionPayments.reduce((acc: number, p: any) => acc + Number(p.total_amount || 0), 0);
+            const paidPayments = subscriptionPayments.filter((p: any) => p.status === 'PAID');
+            const unpaidPayments = subscriptionPayments.filter((p: any) => p.status === 'CREATED' || p.status === 'PENDING_APPROVAL');
+            const refundedPayments = subscriptionPayments.filter((p: any) => p.status === 'REFUNDED');
+            const failedPayments = subscriptionPayments.filter((p: any) => p.status === 'FAILED');
+
+            const totalPaidAmount = paidPayments.reduce((acc: number, p: any) => acc + Number(p.total_amount || 0), 0);
+            const totalUnpaidAmount = unpaidPayments.reduce((acc: number, p: any) => acc + Number(p.total_amount || 0), 0);
+            const totalRefundedAmount = refundedPayments.reduce((acc: number, p: any) => acc + Number(p.refund_amount || p.total_amount || 0), 0);
+
+            const filteredPayments = subscriptionPayments.filter((p: any) => {
+              if (paymentStatusFilter === 'PAID' && p.status !== 'PAID') return false;
+              if (paymentStatusFilter === 'UNPAID' && p.status !== 'CREATED' && p.status !== 'PENDING_APPROVAL') return false;
+              if (paymentStatusFilter === 'REFUNDED' && p.status !== 'REFUNDED') return false;
+              if (paymentStatusFilter === 'FAILED' && p.status !== 'FAILED') return false;
+
+              if (paymentSearch.trim()) {
+                const q = paymentSearch.toLowerCase().trim();
+                const matchSoc = (p.society_name || '').toLowerCase().includes(q);
+                const matchInv = (p.invoice_number || '').toLowerCase().includes(q);
+                const matchRef = (p.gateway_payment_id || '').toLowerCase().includes(q);
+                const matchRefundRef = (p.refund_reference || '').toLowerCase().includes(q);
+                return matchSoc || matchInv || matchRef || matchRefundRef;
+              }
+              return true;
+            });
+
+            return (
+              <div className="card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.25rem' }}>
+                  <div>
+                    <h3 style={{ margin: 0 }}>Society Subscription Invoices & Payment Verifications</h3>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '0.25rem 0 0' }}>
+                      Audit invoices, verify manual UPI transfers, issue refunds, mark unpaid/paid, or inspect credit notes.
+                    </p>
+                  </div>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={handleManualRefresh} disabled={isRefreshing}>
+                    <RefreshCw size={13} className={isRefreshing ? 'spin-animation' : ''} />
+                    <span>Refresh Payments</span>
+                  </button>
+                </div>
+
+                {/* KPI Metrics Summary */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                  <div style={{ padding: '0.85rem', background: 'var(--surface-sunken)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Total Invoiced</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, marginTop: 2 }}>{formatCurrency(totalInvoicedAmount)}</div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>{subscriptionPayments.length} Total Invoices</div>
+                  </div>
+                  <div style={{ padding: '0.85rem', background: '#ecfdf5', borderRadius: 8, border: '1px solid #a7f3d0' }}>
+                    <div style={{ fontSize: '0.72rem', color: '#065f46', textTransform: 'uppercase', fontWeight: 700 }}>Verified & Paid</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#059669', marginTop: 2 }}>{formatCurrency(totalPaidAmount)}</div>
+                    <div style={{ fontSize: '0.74rem', color: '#047857' }}>{paidPayments.length} Active Subscriptions</div>
+                  </div>
+                  <div style={{ padding: '0.85rem', background: '#fffbeb', borderRadius: 8, border: '1px solid #fde68a' }}>
+                    <div style={{ fontSize: '0.72rem', color: '#92400e', textTransform: 'uppercase', fontWeight: 700 }}>Unpaid / Pending</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#d97706', marginTop: 2 }}>{formatCurrency(totalUnpaidAmount)}</div>
+                    <div style={{ fontSize: '0.74rem', color: '#b45309' }}>{unpaidPayments.length} Pending Approval</div>
+                  </div>
+                  <div style={{ padding: '0.85rem', background: '#f5f3ff', borderRadius: 8, border: '1px solid #ddd6fe' }}>
+                    <div style={{ fontSize: '0.72rem', color: '#5b21b6', textTransform: 'uppercase', fontWeight: 700 }}>Refunds Issued</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#7c3aed', marginTop: 2 }}>{formatCurrency(totalRefundedAmount)}</div>
+                    <div style={{ fontSize: '0.74rem', color: '#6d28d9' }}>{refundedPayments.length} Credit Notes</div>
+                  </div>
+                </div>
+
+                {/* Filter & Search Bar */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    {(['ALL', 'PAID', 'UNPAID', 'REFUNDED', 'FAILED'] as const).map((filterKey) => (
+                      <button
+                        key={filterKey}
+                        type="button"
+                        className={`btn btn-sm ${paymentStatusFilter === filterKey ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ fontSize: '0.76rem', padding: '0.3rem 0.65rem' }}
+                        onClick={() => setPaymentStatusFilter(filterKey)}
+                      >
+                        {filterKey === 'ALL' && `All (${subscriptionPayments.length})`}
+                        {filterKey === 'PAID' && `Paid (${paidPayments.length})`}
+                        {filterKey === 'UNPAID' && `Unpaid (${unpaidPayments.length})`}
+                        {filterKey === 'REFUNDED' && `Refund Issued (${refundedPayments.length})`}
+                        {filterKey === 'FAILED' && `Rejected (${failedPayments.length})`}
+                      </button>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 240 }}>
+                    <div style={{ position: 'relative', width: '100%' }}>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="Search society, invoice #, UTR..."
+                        value={paymentSearch}
+                        onChange={(e) => setPaymentSearch(e.target.value)}
+                        style={{ paddingLeft: '2rem', fontSize: '0.82rem' }}
+                      />
+                      <Search size={14} style={{ position: 'absolute', left: '0.65rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Invoices Table */}
+                <div className="table-wrap">
+                  <table className="data-table data-table-wide">
+                    <thead>
+                      <tr>
+                        <th style={{ minWidth: 155, whiteSpace: 'nowrap' }}>Invoice #</th>
+                        <th style={{ minWidth: 140 }}>Society</th>
+                        <th style={{ minWidth: 120, whiteSpace: 'nowrap' }}>Plan</th>
+                        <th style={{ minWidth: 130, whiteSpace: 'nowrap' }}>Total Amount</th>
+                        <th style={{ minWidth: 190 }}>Method & Reference</th>
+                        <th style={{ minWidth: 120, whiteSpace: 'nowrap' }}>Proof / Receipt</th>
+                        <th style={{ minWidth: 140, whiteSpace: 'nowrap' }}>Status</th>
+                        <th style={{ minWidth: 100, whiteSpace: 'nowrap' }}>Date</th>
+                        <th style={{ minWidth: 180 }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredPayments.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                            No subscription invoices matching the selected criteria.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredPayments.map((sp: any) => (
+                          <tr key={sp.id}>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              <button
+                                type="button"
+                                style={{ background: 'none', border: 'none', color: 'var(--primary)', fontWeight: 800, cursor: 'pointer', padding: 0, textDecoration: 'underline', whiteSpace: 'nowrap' }}
+                                onClick={() => setViewingSubInvoice(sp)}
+                                title="Click to view full printable invoice / refund credit note"
+                              >
+                                {sp.invoice_number}
+                              </button>
+                            </td>
+                            <td>
+                              <strong>{sp.society_name}</strong>
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>{sp.plan_name}</td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              <strong style={{ color: 'var(--primary)' }}>{formatCurrency(sp.total_amount)}</strong>
+                              {sp.tax_amount > 0 && (
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                  Incl. {formatCurrency(sp.tax_amount)} tax
+                                </div>
+                              )}
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: 2, flexWrap: 'wrap' }}>
+                                <span className={`badge ${sp.payment_gateway === 'UPI' ? 'badge-info' : 'badge-neutral'}`} style={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
+                                  {sp.payment_gateway || 'ONLINE'}
+                                </span>
+                                {sp.gateway_payment_id && (
+                                  <code style={{ fontSize: '0.78rem', fontWeight: 600, wordBreak: 'break-all' }}>{sp.gateway_payment_id}</code>
+                                )}
+                              </div>
+                              {sp.gateway_order_id && (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', wordBreak: 'break-all' }}>Order: {sp.gateway_order_id}</div>
+                              )}
+                              {sp.notes && (
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: 2 }}>
+                                  "{sp.notes}"
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              {sp.receipt_url ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem', whiteSpace: 'nowrap' }}
+                                  onClick={() => setSelectedReceipt({
+                                    url: sp.receipt_url,
+                                    societyName: sp.society_name,
+                                    invoiceNo: sp.invoice_number,
+                                    amount: sp.total_amount,
+                                    utr: sp.gateway_payment_id,
+                                  })}
+                                >
+                                  <Eye size={13} />
+                                  <span>View Proof</span>
+                                </button>
+                              ) : (
+                                <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>No file attached</span>
+                              )}
+                            </td>
+                            <td>
+                              {sp.status === 'PAID' && (
+                                <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', whiteSpace: 'nowrap' }}>
+                                  <CheckCircle size={12} /> Paid
+                                </span>
+                              )}
+                              {(sp.status === 'CREATED' || sp.status === 'PENDING_APPROVAL') && (
+                                <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', whiteSpace: 'nowrap' }}>
+                                  <Clock size={12} /> {sp.status === 'PENDING_APPROVAL' ? 'Pending Approval' : 'Unpaid'}
+                                </span>
+                              )}
+                              {sp.status === 'REFUNDED' && (
+                                <div>
+                                  <span className="badge badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: '#ede9fe', color: '#6d28d9', borderColor: '#c4b5fd', whiteSpace: 'nowrap' }}>
+                                    <RotateCcw size={12} /> Refund Issued
+                                  </span>
+                                  {sp.refund_amount && (
+                                    <div style={{ fontSize: '0.72rem', color: '#6d28d9', fontWeight: 700, marginTop: 2, whiteSpace: 'nowrap' }}>
+                                      {formatCurrency(sp.refund_amount)} refunded
+                                    </div>
+                                  )}
+                                  {sp.refund_reference && (
+                                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                      Ref: <code>{sp.refund_reference}</code>
+                                    </div>
+                                  )}
+                                  {sp.refund_reason && (
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sp.refund_reason}>
+                                      "{sp.refund_reason}"
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {sp.status === 'FAILED' && (
+                                <div>
+                                  <span className="badge badge-danger" style={{ whiteSpace: 'nowrap' }}>Rejected</span>
+                                  {sp.rejection_reason && (
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--danger)', marginTop: 2 }}>
+                                      Reason: {sp.rejection_reason}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{(sp.paid_at || sp.created_at || '').slice(0, 10)}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                                {/* Action: Unpaid / Pending -> Approve (Paid), Auto-Verify, Reject */}
+                                {(sp.status === 'CREATED' || sp.status === 'PENDING_APPROVAL') && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-success btn-sm"
+                                      title="Manually confirm payment and activate society"
+                                      onClick={() => handleMarkPaid(sp)}
+                                    >
+                                      <Check size={13} /> Approve (Paid)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      title="Auto-validate UTR and activate"
+                                      onClick={async () => {
+                                        try {
+                                          const res = await apiFetch(`/api/super-admin/subscription-payments/${sp.id}/auto-verify`, {
+                                            method: 'POST',
+                                          });
+                                          notify(res.message);
+                                          loadDashboard();
+                                        } catch (err: any) {
+                                          notify(err.message, 'error');
+                                        }
+                                      }}
+                                    >
+                                      <Sparkles size={13} /> Auto
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger btn-sm"
+                                      title="Reject invalid payment"
+                                      onClick={async () => {
+                                        const reason = window.prompt('Enter rejection reason for society admin:', 'UTR number could not be verified in bank records');
+                                        if (!reason) return;
+                                        try {
+                                          const res = await apiFetch(`/api/super-admin/subscription-payments/${sp.id}/reject`, {
+                                            method: 'POST',
+                                            body: { reason },
+                                          });
+                                          notify(res.message);
+                                          loadDashboard();
+                                        } catch (err: any) {
+                                          notify(err.message, 'error');
+                                        }
+                                      }}
+                                    >
+                                      Reject
+                                    </button>
+                                  </>
+                                )}
+
+                                {/* Action: Paid -> Issue Refund or Mark Unpaid */}
+                                {sp.status === 'PAID' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ borderColor: '#c4b5fd', color: '#6d28d9', fontWeight: 600 }}
+                                      title="Issue full or partial refund to society"
+                                      onClick={() => openRefundModal(sp)}
+                                    >
+                                      <RotateCcw size={13} /> Refund Issue
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      title="Mark subscription invoice as unpaid / pending payment"
+                                      onClick={() => handleMarkUnpaid(sp)}
+                                    >
+                                      <Clock size={13} /> Mark Unpaid
+                                    </button>
+                                  </>
+                                )}
+
+                                {/* Action: Refunded -> Refund Details & Actions ("if refunded back to refund issue") */}
+                                {sp.status === 'REFUNDED' && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ borderColor: '#c4b5fd', color: '#6d28d9', fontWeight: 700 }}
+                                    title="View or update refund issue details, revert to unpaid or re-confirm paid"
+                                    onClick={() => openRefundModal(sp)}
+                                  >
+                                    <RotateCcw size={13} /> Refund Details & Actions
+                                  </button>
+                                )}
+
+                                {/* Always: View Printable Invoice */}
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  title="View official subscription invoice or credit note"
+                                  onClick={() => setViewingSubInvoice(sp)}
+                                >
+                                  <FileText size={13} /> Invoice
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* TAB: PLATFORM SETTINGS */}
           {activeTab === 'SETTINGS' && (
             <div className="card">
-              <h3>Platform-Wide SaaS Configuration, Payment Gateways & Trial Policies</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.25rem' }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>Platform-Wide SaaS Configuration, Gateways & Customization</h3>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '0.25rem 0 0' }}>
+                    Configure responsive logos, subscription tax rules, payment gateway toggles, SEO meta tags, and Google AdSense monetization.
+                  </p>
+                </div>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={handleManualRefresh} disabled={isRefreshing}>
+                  <RefreshCw size={13} className={isRefreshing ? 'spin-animation' : ''} />
+                  <span>Reload Settings</span>
+                </button>
+              </div>
+
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
@@ -697,6 +1115,36 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         bankIfsc: settingsForm.bank_ifsc,
                         razorpaySandboxMode: Boolean(settingsForm.razorpay_sandbox_mode),
                         welcomeEmailTemplate: settingsForm.welcome_email_template,
+
+                        // Subscription Taxes
+                        subscriptionTaxEnabled: Boolean(settingsForm.subscription_tax_enabled ?? 1),
+                        subscriptionTaxName: settingsForm.subscription_tax_name || 'GST',
+                        subscriptionTaxPercent: Number(settingsForm.subscription_tax_percent ?? 18),
+
+                        // Master Payment Gateway Controls
+                        razorpayEnabled: Boolean(settingsForm.razorpay_enabled ?? 1),
+                        upiPaymentEnabled: Boolean(settingsForm.upi_payment_enabled ?? 1),
+                        paytmEnabled: Boolean(settingsForm.paytm_enabled ?? 0),
+                        customGatewayEnabled: Boolean(settingsForm.custom_gateway_enabled ?? 0),
+
+                        // SEO & Monetization
+                        metaTitle: settingsForm.meta_title,
+                        metaDescription: settingsForm.meta_description,
+                        metaKeywords: settingsForm.meta_keywords,
+                        metaAuthor: settingsForm.meta_author,
+                        metaOgImage: settingsForm.meta_og_image,
+                        faviconUrl: settingsForm.favicon_url,
+                        googleAdsenseEnabled: Boolean(settingsForm.google_adsense_enabled ?? 0),
+                        googleAdsenseClientId: settingsForm.google_adsense_client_id,
+                        googleAdSlotHeader: settingsForm.google_ad_slot_header,
+                        googleAdSlotSidebar: settingsForm.google_ad_slot_sidebar,
+                        googleAdSlotFooter: settingsForm.google_ad_slot_footer,
+                        googleAnalyticsId: settingsForm.google_analytics_id,
+                        customHeaderScripts: settingsForm.custom_header_scripts,
+
+                        // Responsive Branding & Logo
+                        logoUrl: settingsForm.logo_url,
+                        darkLogoUrl: settingsForm.dark_logo_url,
                       },
                     });
                     notify(res.message);
@@ -712,79 +1160,221 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     notify(err.message, 'error');
                   }
                 }}
-                style={{ display: 'grid', gap: '1.25rem', marginTop: '1rem' }}
+                style={{ display: 'grid', gap: '1.5rem' }}
               >
-                <div className="form-grid">
-                  <div className="form-group">
-                    <label>Platform Brand Name</label>
-                    <input
-                      type="text"
-                      className="input"
-                      value={settingsForm.platform_name || ''}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, platform_name: e.target.value })}
-                    />
+                {/* 1. BRANDING & RESPONSIVE LOGO */}
+                <div style={{ padding: '1.25rem', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-body)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <ImageIcon size={19} style={{ color: 'var(--primary)' }} />
+                    <h4 style={{ margin: 0, fontSize: '0.98rem' }}>1. Platform Branding & Responsive Logo</h4>
                   </div>
-                  <div className="form-group">
-                    <label>Support Email</label>
-                    <input
-                      type="email"
-                      className="input"
-                      value={settingsForm.support_email || ''}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, support_email: e.target.value })}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Support Phone</label>
-                    <input
-                      type="text"
-                      className="input"
-                      value={settingsForm.support_phone || ''}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, support_phone: e.target.value })}
-                    />
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                    Upload or specify your platform brand logo. The logo dynamically adapts across desktop, tablet, mobile navigation bars, and PDF invoices.
+                  </p>
+
+                  <div className="form-grid" style={{ alignItems: 'flex-start' }}>
+                    <div className="form-group">
+                      <label>Platform Logo URL or File</label>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <input
+                          type="text"
+                          className="input"
+                          placeholder="https://... or upload local file"
+                          value={settingsForm.logo_url || ''}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, logo_url: e.target.value })}
+                        />
+                        <label
+                          className="btn btn-secondary btn-sm"
+                          style={{ cursor: isUploadingLogo ? 'wait' : 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                        >
+                          <Upload size={14} />
+                          <span>{isUploadingLogo ? 'Uploading...' : 'Upload Image'}</span>
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                            style={{ display: 'none' }}
+                            disabled={isUploadingLogo}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleLogoUpload(f);
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                        Supported: PNG, SVG, JPG, WebP. Recommended transparent background (max height 60px).
+                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <label>Live Responsive Preview (Multi-Device)</label>
+                      <div
+                        style={{
+                          padding: '0.75rem 1rem',
+                          borderRadius: 8,
+                          background: 'var(--bg-surface, #ffffff)',
+                          border: '1px solid var(--border)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.65rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>Desktop Topbar:</span>
+                          <ResponsiveLogo
+                            logoUrl={settingsForm.logo_url}
+                            platformName={settingsForm.platform_name || 'SocietyOS SaaS'}
+                            maxHeight={36}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px dashed var(--border)', paddingTop: 6 }}>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>Mobile Compact:</span>
+                          <ResponsiveLogo
+                            logoUrl={settingsForm.logo_url}
+                            platformName={settingsForm.platform_name || 'SocietyOS SaaS'}
+                            maxHeight={28}
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="form-grid">
-                  <div className="form-group">
-                    <label>Default Trial Duration (Days)</label>
-                    <input
-                      type="number"
-                      className="input"
-                      value={settingsForm.default_trial_days ?? 14}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, default_trial_days: e.target.value })}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Default Grace Period (Days)</label>
-                    <input
-                      type="number"
-                      className="input"
-                      value={settingsForm.default_grace_period_days ?? 7}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, default_grace_period_days: e.target.value })}
-                    />
+                {/* 2. GENERAL PLATFORM DETAILS */}
+                <div style={{ padding: '1.25rem', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-body)' }}>
+                  <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.98rem' }}>2. Platform Contact & Support Profile</h4>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Platform Brand Name</label>
+                      <input
+                        type="text"
+                        className="input"
+                        value={settingsForm.platform_name || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, platform_name: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Support Email</label>
+                      <input
+                        type="email"
+                        className="input"
+                        value={settingsForm.support_email || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, support_email: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Support Phone</label>
+                      <input
+                        type="text"
+                        className="input"
+                        value={settingsForm.support_phone || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, support_phone: e.target.value })}
+                      />
+                    </div>
                   </div>
                 </div>
 
-                {/* PAYMENT GATEWAY INTEGRATION SECTION */}
-                <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+                {/* 3. SUBSCRIPTION TAX & INVOICING RULES */}
+                <div style={{ padding: '1.25rem', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-body)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Percent size={18} style={{ color: 'var(--primary)' }} />
+                      <h4 style={{ margin: 0, fontSize: '0.98rem' }}>3. Subscription Taxes & GST Setup</h4>
+                    </div>
+                    <label className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settingsForm.subscription_tax_enabled ?? 1)}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, subscription_tax_enabled: e.target.checked ? 1 : 0 })}
+                      />
+                      <span className="toggle-slider"></span>
+                      <span>{settingsForm.subscription_tax_enabled ? 'Taxes Active (ON)' : 'Taxes Disabled (OFF)'}</span>
+                    </label>
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                    Configure the tax percentage and tax authority label applied to society subscription billing and invoices platform-wide.
+                  </p>
+
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Tax Name / Label</label>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="GST, VAT, Sales Tax, Service Tax"
+                        value={settingsForm.subscription_tax_name || 'GST'}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, subscription_tax_name: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Default Tax Percentage (%)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        className="input"
+                        value={settingsForm.subscription_tax_percent ?? 18}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, subscription_tax_percent: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Calculation Example</label>
+                      <div style={{ padding: '0.65rem 0.85rem', borderRadius: 8, background: 'var(--bg-surface)', border: '1px solid var(--border)', fontSize: '0.82rem' }}>
+                        <div>Base Price: <strong>₹2,499.00</strong></div>
+                        <div>
+                          {settingsForm.subscription_tax_enabled ? (
+                            <>
+                              + {settingsForm.subscription_tax_percent ?? 18}% {settingsForm.subscription_tax_name || 'GST'}:{' '}
+                              <strong>₹{((2499 * Number(settingsForm.subscription_tax_percent ?? 18)) / 100).toFixed(2)}</strong>
+                            </>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>Taxes Disabled (₹0.00)</span>
+                          )}
+                        </div>
+                        <div style={{ fontWeight: 700, color: 'var(--primary)', marginTop: 2 }}>
+                          Payable Total:{' '}
+                          ₹{settingsForm.subscription_tax_enabled
+                            ? (2499 * (1 + Number(settingsForm.subscription_tax_percent ?? 18) / 100)).toFixed(2)
+                            : '2499.00'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. MASTER PAYMENT GATEWAY CONTROLS WITH ON/OFF TOGGLES */}
+                <div style={{ padding: '1.25rem', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-body)' }}>
                   <div style={{ marginBottom: '1rem' }}>
-                    <h4 style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <CreditCard size={18} style={{ color: 'var(--primary)' }} />
-                      Platform Payment Gateway Integration (SaaS Subscription Billing)
-                    </h4>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <CreditCard size={19} style={{ color: 'var(--primary)' }} />
+                      <h4 style={{ margin: 0, fontSize: '0.98rem' }}>4. Master Payment Gateway Controls (ON / OFF Toggles)</h4>
+                    </div>
                     <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                      Configure your platform merchant API keys to collect SaaS subscription payments from registered societies. Secret keys are encrypted at rest and never exposed in plain text after saving.
+                      Individually enable or disable payment gateways. When a gateway is toggled OFF, societies cannot check out with that method.
                     </p>
                   </div>
 
-                  {/* Razorpay Gateway Card */}
-                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-body)', marginBottom: '1rem' }}>
+                  {/* GATEWAY 1: RAZORPAY */}
+                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-surface)', marginBottom: '1.25rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                      <strong style={{ fontSize: '0.9rem' }}>1. Razorpay Payment Gateway Keys (Platform Merchant Account)</strong>
-                      <span className={`badge ${settingsForm.razorpay_key_id ? 'badge-success' : 'badge-neutral'}`}>
-                        {settingsForm.razorpay_key_id ? 'Key ID Configured' : 'Not Configured'}
-                      </span>
+                      <div>
+                        <strong style={{ fontSize: '0.92rem' }}>Gateway 1: Razorpay Online Checkout (Cards / NetBanking / UPI)</strong>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Automated instant subscription activation via webhook</div>
+                      </div>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settingsForm.razorpay_enabled ?? 1)}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_enabled: e.target.checked ? 1 : 0 })}
+                        />
+                        <span className="toggle-slider"></span>
+                        <span style={{ color: settingsForm.razorpay_enabled ? '#10b981' : '#64748b' }}>
+                          {settingsForm.razorpay_enabled ? 'Razorpay ON (Active)' : 'Razorpay OFF (Disabled)'}
+                        </span>
+                      </label>
                     </div>
+
                     <div className="form-grid">
                       <div className="form-group">
                         <label>Razorpay Key ID (Public Key)</label>
@@ -808,7 +1398,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         <input
                           type="password"
                           className="input"
-                          placeholder={settingsForm.has_razorpay_secret ? '•••••••••••••••• (Enter new secret to replace)' : 'Enter Razorpay Key Secret'}
+                          placeholder={settingsForm.has_razorpay_secret ? '•••••••••••••••• (Enter new to replace)' : 'Enter Razorpay Key Secret'}
                           value={settingsForm.razorpay_key_secret || ''}
                           onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_key_secret: e.target.value })}
                         />
@@ -825,7 +1415,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         <input
                           type="password"
                           className="input"
-                          placeholder={settingsForm.has_razorpay_webhook_secret ? '•••••••••••••••• (Enter new webhook secret)' : 'whsec_xxxxxxxxxxxx'}
+                          placeholder={settingsForm.has_razorpay_webhook_secret ? '••••••••••••••••' : 'whsec_xxxxxxxxxxxx'}
                           value={settingsForm.razorpay_webhook_secret || ''}
                           onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_webhook_secret: e.target.value })}
                         />
@@ -833,38 +1423,131 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     </div>
                   </div>
 
-                  {/* Paytm & Custom Gateway Card */}
-                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-body)', marginBottom: '1rem' }}>
+                  {/* GATEWAY 2: DIRECT UPI QR & BANK TRANSFER WITH LIVE CARD PREVIEW */}
+                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-surface)', marginBottom: '1.25rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                      <strong style={{ fontSize: '0.9rem' }}>2. Paytm & Custom Payment Gateway Credentials</strong>
-                      <span className={`badge ${settingsForm.paytm_merchant_id || settingsForm.custom_gateway_api_key ? 'badge-success' : 'badge-neutral'}`}>
-                        {settingsForm.paytm_merchant_id || settingsForm.custom_gateway_api_key ? 'Configured' : 'Optional'}
-                      </span>
+                      <div>
+                        <strong style={{ fontSize: '0.92rem' }}>Gateway 2: Direct UPI QR Code & Bank Transfer</strong>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Generates dynamic scannable QR card with manual or automated verification</div>
+                      </div>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settingsForm.upi_payment_enabled ?? 1)}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, upi_payment_enabled: e.target.checked ? 1 : 0 })}
+                        />
+                        <span className="toggle-slider"></span>
+                        <span style={{ color: settingsForm.upi_payment_enabled ? '#10b981' : '#64748b' }}>
+                          {settingsForm.upi_payment_enabled ? 'UPI Payment ON (Active)' : 'UPI Payment OFF (Disabled)'}
+                        </span>
+                      </label>
                     </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem', alignItems: 'start' }}>
+                      {/* Left: Input Fields */}
+                      <div>
+                        <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                          <label>Platform UPI ID (VPA) *</label>
+                          <input
+                            type="text"
+                            className="input"
+                            placeholder="e.g. taxprofessionals97-1@okaxis or company@icici"
+                            value={settingsForm.upi_id || ''}
+                            onChange={(e) => setSettingsForm({ ...settingsForm, upi_id: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                          <label>UPI Payee / Account Name</label>
+                          <input
+                            type="text"
+                            className="input"
+                            placeholder="e.g. SocietyOS Enterprise SaaS"
+                            value={settingsForm.upi_payee_name || ''}
+                            onChange={(e) => setSettingsForm({ ...settingsForm, upi_payee_name: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-grid">
+                          <div className="form-group">
+                            <label>Bank Name</label>
+                            <input
+                              type="text"
+                              className="input"
+                              placeholder="HDFC / SBI / ICICI"
+                              value={settingsForm.bank_name || ''}
+                              onChange={(e) => setSettingsForm({ ...settingsForm, bank_name: e.target.value })}
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label>Account Number</label>
+                            <input
+                              type="text"
+                              className="input"
+                              placeholder="Bank Account Number"
+                              value={settingsForm.bank_account_number || ''}
+                              onChange={(e) => setSettingsForm({ ...settingsForm, bank_account_number: e.target.value })}
+                            />
+                          </div>
+                        </div>
+                        <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                          <label>IFSC Code</label>
+                          <input
+                            type="text"
+                            className="input"
+                            placeholder="e.g. HDFC0001234"
+                            value={settingsForm.bank_ifsc || ''}
+                            onChange={(e) => setSettingsForm({ ...settingsForm, bank_ifsc: e.target.value.toUpperCase() })}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Right: Live Dynamic UPI QR Code Card */}
+                      <div>
+                        <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>
+                          LIVE UPI QR CARD PREVIEW (AS SEEN BY SOCIETIES)
+                        </div>
+                        <UpiQrCard
+                          upiId={settingsForm.upi_id}
+                          payeeName={settingsForm.upi_payee_name || 'SocietyOS Platform'}
+                          amount={2499}
+                          note="Subscription Renewal Sample"
+                          onCopySuccess={(msg) => notify(msg)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* GATEWAY 3: PAYTM & CUSTOM GATEWAY */}
+                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                      <strong style={{ fontSize: '0.92rem' }}>Gateway 3: Paytm & Custom Gateway Provider (PhonePe / Cashfree / Stripe)</strong>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settingsForm.paytm_enabled ?? 0)}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, paytm_enabled: e.target.checked ? 1 : 0 })}
+                        />
+                        <span className="toggle-slider"></span>
+                        <span>{settingsForm.paytm_enabled ? 'Paytm ON' : 'Paytm OFF'}</span>
+                      </label>
+                    </div>
+
                     <div className="form-grid">
                       <div className="form-group">
                         <label>Paytm Merchant ID (MID)</label>
                         <input
                           type="text"
                           className="input"
-                          placeholder="e.g. PLATFORM1234567890"
+                          placeholder="PLATFORM1234567890"
                           value={settingsForm.paytm_merchant_id || ''}
                           onChange={(e) => setSettingsForm({ ...settingsForm, paytm_merchant_id: e.target.value })}
                         />
                       </div>
                       <div className="form-group">
-                        <label>
-                          Paytm Merchant Key{' '}
-                          {settingsForm.has_paytm_secret && (
-                            <span className="badge badge-success" style={{ marginLeft: '0.35rem', fontSize: '0.68rem' }}>
-                              Saved (Encrypted)
-                            </span>
-                          )}
-                        </label>
+                        <label>Paytm Merchant Key</label>
                         <input
                           type="password"
                           className="input"
-                          placeholder={settingsForm.has_paytm_secret ? '•••••••••••••••• (Enter new key to replace)' : 'Enter Paytm Merchant Key'}
+                          placeholder="Enter Paytm Merchant Key"
                           value={settingsForm.paytm_merchant_key || ''}
                           onChange={(e) => setSettingsForm({ ...settingsForm, paytm_merchant_key: e.target.value })}
                         />
@@ -873,144 +1556,228 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
                     <div className="form-grid" style={{ marginTop: '0.75rem' }}>
                       <div className="form-group">
-                        <label>Custom Gateway Provider Name (PhonePe / Cashfree / Stripe)</label>
+                        <label>Custom Gateway Name (e.g. Cashfree, Stripe)</label>
                         <input
                           type="text"
                           className="input"
-                          placeholder="e.g. PhonePe PG, Cashfree, CCAvenue"
+                          placeholder="Cashfree PG"
                           value={settingsForm.custom_gateway_name || ''}
                           onChange={(e) => setSettingsForm({ ...settingsForm, custom_gateway_name: e.target.value })}
                         />
                       </div>
                       <div className="form-group">
-                        <label>Custom Gateway API Key / App ID</label>
+                        <label>Custom Gateway API Key</label>
                         <input
                           type="text"
                           className="input"
-                          placeholder="Enter Merchant App ID / Public API Key"
+                          placeholder="Enter App ID / Public Key"
                           value={settingsForm.custom_gateway_api_key || ''}
                           onChange={(e) => setSettingsForm({ ...settingsForm, custom_gateway_api_key: e.target.value })}
                         />
                       </div>
-                      <div className="form-group">
-                        <label>
-                          Custom Gateway Secret Key{' '}
-                          {settingsForm.has_custom_gateway_secret && (
-                            <span className="badge badge-success" style={{ marginLeft: '0.35rem', fontSize: '0.68rem' }}>
-                              Saved (Encrypted)
-                            </span>
-                          )}
-                        </label>
-                        <input
-                          type="password"
-                          className="input"
-                          placeholder={settingsForm.has_custom_gateway_secret ? '•••••••••••••••• (Enter new secret to replace)' : 'Enter Custom Gateway Secret Key'}
-                          value={settingsForm.custom_gateway_secret || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, custom_gateway_secret: e.target.value })}
-                        />
-                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. SEO META TAGS & GOOGLE ADSENSE MONETIZATION */}
+                <div style={{ padding: '1.25rem', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-body)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <Globe size={19} style={{ color: 'var(--primary)' }} />
+                    <h4 style={{ margin: 0, fontSize: '0.98rem' }}>5. SEO Meta Tags & Google AdSense Monetization</h4>
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                    Customize SEO meta tags for high Google rankings and configure Google AdSense monetization banners.
+                  </p>
+
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>SEO Meta Title</label>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="SocietyOS — Multi-Tenant Residential Society & RWA Software"
+                        value={settingsForm.meta_title || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, meta_title: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Browser Favicon URL</label>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="https://.../favicon.ico or /favicon.ico"
+                        value={settingsForm.favicon_url || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, favicon_url: e.target.value })}
+                      />
                     </div>
                   </div>
 
-                  {/* Platform UPI & Bank Account Details */}
-                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-body)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                      <strong style={{ fontSize: '0.9rem' }}>3. Platform UPI & Bank Account Details (Direct Subscription Transfers)</strong>
+                  <div className="form-group" style={{ margin: '0.75rem 0' }}>
+                    <label>SEO Meta Description</label>
+                    <textarea
+                      rows={2}
+                      className="textarea"
+                      placeholder="Comprehensive cloud residential society accounting, billing, maintenance, and resident portal."
+                      value={settingsForm.meta_description || ''}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, meta_description: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>SEO Keywords (comma separated)</label>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="society management, apartment billing, rwa software, housing society erp"
+                        value={settingsForm.meta_keywords || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, meta_keywords: e.target.value })}
+                      />
                     </div>
+                    <div className="form-group">
+                      <label>Social Share (OpenGraph) Image URL</label>
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="https://.../og-banner.jpg"
+                        value={settingsForm.meta_og_image || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, meta_og_image: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Google AdSense Section */}
+                  <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                      <strong style={{ fontSize: '0.9rem' }}>Google AdSense Monetization Banners</strong>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settingsForm.google_adsense_enabled ?? 0)}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, google_adsense_enabled: e.target.checked ? 1 : 0 })}
+                        />
+                        <span className="toggle-slider"></span>
+                        <span>{settingsForm.google_adsense_enabled ? 'Google Ads ON' : 'Google Ads OFF'}</span>
+                      </label>
+                    </div>
+
                     <div className="form-grid">
                       <div className="form-group">
-                        <label>Platform UPI ID (VPA)</label>
+                        <label>Google AdSense Client ID (Publisher ID)</label>
                         <input
                           type="text"
                           className="input"
-                          placeholder="e.g. societyos@icici"
-                          value={settingsForm.upi_id || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, upi_id: e.target.value })}
+                          placeholder="ca-pub-1234567890123456"
+                          value={settingsForm.google_adsense_client_id || ''}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, google_adsense_client_id: e.target.value })}
                         />
                       </div>
                       <div className="form-group">
-                        <label>UPI Payee Name</label>
+                        <label>Header Ad Slot ID</label>
                         <input
                           type="text"
                           className="input"
-                          placeholder="e.g. SocietyOS SaaS Platform"
-                          value={settingsForm.upi_payee_name || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, upi_payee_name: e.target.value })}
+                          placeholder="e.g. 1234567890"
+                          value={settingsForm.google_ad_slot_header || ''}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, google_ad_slot_header: e.target.value })}
                         />
                       </div>
                       <div className="form-group">
-                        <label>Bank Name</label>
+                        <label>Sidebar Ad Slot ID</label>
                         <input
                           type="text"
                           className="input"
-                          placeholder="e.g. HDFC Bank, SBI, ICICI"
-                          value={settingsForm.bank_name || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, bank_name: e.target.value })}
+                          placeholder="e.g. 9876543210"
+                          value={settingsForm.google_ad_slot_sidebar || ''}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, google_ad_slot_sidebar: e.target.value })}
                         />
                       </div>
                       <div className="form-group">
-                        <label>Bank Account Number</label>
+                        <label>Google Analytics ID (G-XXXXXXXXXX)</label>
                         <input
                           type="text"
                           className="input"
-                          placeholder="Account Number for NEFT/RTGS/IMPS"
-                          value={settingsForm.bank_account_number || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, bank_account_number: e.target.value })}
+                          placeholder="G-XXXXXXXXXX"
+                          value={settingsForm.google_analytics_id || ''}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, google_analytics_id: e.target.value })}
                         />
                       </div>
-                      <div className="form-group">
-                        <label>Bank IFSC Code</label>
-                        <input
-                          type="text"
-                          className="input"
-                          placeholder="e.g. HDFC0001234"
-                          value={settingsForm.bank_ifsc || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, bank_ifsc: e.target.value.toUpperCase() })}
-                        />
-                      </div>
+                    </div>
+
+                    <div className="form-group" style={{ marginTop: '0.75rem' }}>
+                      <label>Custom Header / AdSense &lt;head&gt; Scripts</label>
+                      <textarea
+                        rows={2}
+                        className="textarea"
+                        style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}
+                        placeholder="<script async src='https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js' ...></script>"
+                        value={settingsForm.custom_header_scripts || ''}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, custom_header_scripts: e.target.value })}
+                      />
                     </div>
                   </div>
                 </div>
 
-                <div className="form-grid">
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(settingsForm.default_trial_enabled)}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, default_trial_enabled: e.target.checked ? 1 : 0 })}
-                    />
-                    Enable Free Trial for New Society Registrations
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(settingsForm.auto_approve_paid_societies)}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, auto_approve_paid_societies: e.target.checked ? 1 : 0 })}
-                    />
-                    Auto-Approve Societies After Verified Payment
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(settingsForm.razorpay_sandbox_mode)}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_sandbox_mode: e.target.checked ? 1 : 0 })}
-                    />
-                    Razorpay Sandbox Testing Mode Enabled
-                  </label>
+                {/* 6. POLICIES & AUTOMATION */}
+                <div style={{ padding: '1.25rem', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-body)' }}>
+                  <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.98rem' }}>6. Trial Policies & Email Automation</h4>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Default Trial Duration (Days)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        value={settingsForm.default_trial_days ?? 14}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, default_trial_days: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Default Grace Period (Days)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        value={settingsForm.default_grace_period_days ?? 7}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, default_grace_period_days: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-grid" style={{ marginTop: '0.75rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settingsForm.default_trial_enabled)}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, default_trial_enabled: e.target.checked ? 1 : 0 })}
+                      />
+                      Enable Free Trial for New Registrations
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settingsForm.auto_approve_paid_societies)}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, auto_approve_paid_societies: e.target.checked ? 1 : 0 })}
+                      />
+                      Auto-Approve Societies After Verified Payment
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settingsForm.razorpay_sandbox_mode)}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_sandbox_mode: e.target.checked ? 1 : 0 })}
+                      />
+                      Razorpay Sandbox Mode (Test Transactions)
+                    </label>
+                  </div>
                 </div>
 
-                <div className="form-group">
-                  <label>Welcome Email Template</label>
-                  <textarea
-                    rows={3}
-                    className="textarea"
-                    value={settingsForm.welcome_email_template || ''}
-                    onChange={(e) => setSettingsForm({ ...settingsForm, welcome_email_template: e.target.value })}
-                  />
-                </div>
-
-                <div>
-                  <button type="submit" className="btn btn-primary">Save Platform & Gateway Settings</button>
+                <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '0.5rem' }}>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{ padding: '0.75rem 1.85rem', fontSize: '0.96rem', fontWeight: 700 }}
+                  >
+                    Save Platform, Gateway & Branding Settings
+                  </button>
                 </div>
               </form>
             </div>
@@ -1369,13 +2136,307 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   <input type="number" className="input" value={newPlanForm.trialDays} onChange={(e) => setNewPlanForm({ ...newPlanForm, trialDays: Number(e.target.value) })} />
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+
+              {/* Tax Setup on Subscription Plan */}
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Tax Name / Label</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="GST, VAT, or None"
+                    value={newPlanForm.taxName}
+                    onChange={(e) => setNewPlanForm({ ...newPlanForm, taxName: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Tax Percentage (%)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    className="input"
+                    value={newPlanForm.taxPercent}
+                    onChange={(e) => setNewPlanForm({ ...newPlanForm, taxPercent: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+
+              {/* Price Calculation Preview Card */}
+              <div style={{ background: 'var(--bg-subtle, #f8fafc)', padding: '0.75rem 1rem', borderRadius: 8, border: '1px solid var(--border)', fontSize: '0.84rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span>Base Price:</span>
+                  <strong>{formatCurrency(newPlanForm.priceAmount)}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span>{newPlanForm.taxName || 'Tax'} ({newPlanForm.taxPercent}%):</span>
+                  <strong>{formatCurrency(Number(((newPlanForm.priceAmount * (newPlanForm.taxPercent || 0)) / 100).toFixed(2)))}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border)', paddingTop: 4, fontWeight: 700, color: 'var(--primary)' }}>
+                  <span>Total Payable Amount:</span>
+                  <span>{formatCurrency(Number((newPlanForm.priceAmount * (1 + (newPlanForm.taxPercent || 0) / 100)).toFixed(2)))}</span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setModalMode('NONE')}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Save Plan</button>
               </div>
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL: VIEW PAYMENT RECEIPT PROOF */}
+      {selectedReceipt && (
+        <div className="modal-backdrop" onClick={() => setSelectedReceipt(null)}>
+          <div className="modal-card" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Payment Receipt Proof — {selectedReceipt.invoiceNo}</h3>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Society: <strong>{selectedReceipt.societyName}</strong> | Amount: <strong>{formatCurrency(selectedReceipt.amount)}</strong>
+                  {selectedReceipt.utr && <span> | UTR: <code>{selectedReceipt.utr}</code></span>}
+                </div>
+              </div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedReceipt(null)}>✕</button>
+            </div>
+
+            <div style={{ textAlign: 'center', background: 'var(--bg-subtle)', padding: '1rem', borderRadius: 8, maxHeight: '65vh', overflow: 'auto' }}>
+              {selectedReceipt.url.endsWith('.pdf') ? (
+                <iframe src={selectedReceipt.url} style={{ width: '100%', height: 420, border: 'none' }} title="PDF Receipt" />
+              ) : (
+                <img
+                  src={selectedReceipt.url}
+                  alt="Subscription Payment Receipt"
+                  style={{ maxWidth: '100%', maxHeight: 460, objectFit: 'contain', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
+                />
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
+              <a
+                href={selectedReceipt.url}
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-secondary btn-sm"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <ExternalLink size={14} /> Open in New Tab / Download
+              </a>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setSelectedReceipt(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ISSUE OR MANAGE REFUND */}
+      {refundModalPayment && (
+        <div className="modal-backdrop" onClick={() => setRefundModalPayment(null)}>
+          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.65rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <RotateCcw size={18} color="#7c3aed" />
+                <h3 style={{ margin: 0 }}>
+                  {refundModalPayment.status === 'REFUNDED'
+                    ? 'Refund Details & Actions'
+                    : 'Issue Subscription Refund'}
+                </h3>
+              </div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setRefundModalPayment(null)}>
+                <X size={15} />
+              </button>
+            </div>
+
+            {/* Society & Invoice Summary Card */}
+            <div style={{ padding: '0.85rem 1rem', background: 'var(--surface-sunken)', borderRadius: 8, border: '1px solid var(--border)', marginBottom: '1.25rem', fontSize: '0.85rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Billed Society</div>
+                  <strong style={{ fontSize: '0.98rem' }}>{refundModalPayment.society_name}</strong>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Invoice Number</div>
+                  <strong>{refundModalPayment.invoice_number}</strong>
+                </div>
+              </div>
+              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border)', paddingTop: '0.5rem' }}>
+                <span>Invoice Total: <strong>{formatCurrency(refundModalPayment.total_amount)}</strong></span>
+                <span>Payment Mode: <strong>{refundModalPayment.payment_gateway || 'UPI'}</strong></span>
+              </div>
+            </div>
+
+            {/* If Already Refunded: Notice & Quick Actions */}
+            {refundModalPayment.status === 'REFUNDED' && (
+              <div style={{ padding: '0.75rem 1rem', background: '#f5f3ff', border: '1.5px solid #c4b5fd', borderRadius: 8, color: '#5b21b6', marginBottom: '1.25rem', fontSize: '0.83rem' }}>
+                <div style={{ fontWeight: 800, textTransform: 'uppercase' }}>Refund Already Issued</div>
+                <div style={{ marginTop: 2 }}>
+                  Processed on <strong>{(refundModalPayment.refunded_at || refundModalPayment.created_at || '').slice(0, 10)}</strong> for{' '}
+                  <strong>{formatCurrency(refundModalPayment.refund_amount || refundModalPayment.total_amount)}</strong>.
+                </div>
+                {refundModalPayment.refund_reference && (
+                  <div style={{ marginTop: 2 }}>
+                    Bank/UPI Ref: <code>{refundModalPayment.refund_reference}</code> ({refundModalPayment.refund_gateway || 'UPI'})
+                  </div>
+                )}
+                {refundModalPayment.refund_reason && (
+                  <div style={{ marginTop: 2, fontStyle: 'italic' }}>
+                    Reason: "{refundModalPayment.refund_reason}"
+                  </div>
+                )}
+                <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => handleMarkUnpaid(refundModalPayment)}
+                    title="Transition this subscription payment back to Unpaid"
+                  >
+                    <Clock size={13} /> Revert to Unpaid
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-success btn-sm"
+                    onClick={() => handleMarkPaid(refundModalPayment)}
+                    title="Re-confirm payment as Paid and reactivate society"
+                  >
+                    <Check size={13} /> Re-confirm as Paid
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setViewingSubInvoice(refundModalPayment);
+                    }}
+                  >
+                    <FileText size={13} /> View Credit Note
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Refund Input Form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleConfirmRefund();
+              }}
+              style={{ display: 'grid', gap: '0.85rem' }}
+            >
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Refund Amount (INR) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    className="input"
+                    placeholder={String(refundModalPayment.total_amount)}
+                    value={refundForm.refundAmount}
+                    onChange={(e) => setRefundForm({ ...refundForm, refundAmount: e.target.value })}
+                  />
+                  <small style={{ color: 'var(--text-muted)' }}>Max refundable: {formatCurrency(refundModalPayment.total_amount)}</small>
+                </div>
+
+                <div className="form-group">
+                  <label>Refund Payout Gateway / Mode</label>
+                  <select
+                    className="select"
+                    value={refundForm.refundGateway}
+                    onChange={(e) => setRefundForm({ ...refundForm, refundGateway: e.target.value })}
+                  >
+                    <option value="UPI">Direct UPI Transfer</option>
+                    <option value="BANK_TRANSFER">NEFT / IMPS Bank Transfer</option>
+                    <option value="RAZORPAY">Razorpay Gateway Refund</option>
+                    <option value="PAYTM">Paytm Gateway Refund</option>
+                    <option value="MANUAL_CASH">Cash / Offline Settlement</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Refund Payout Reference / UTR Number</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g. UTR 502847291048 or Razorpay rfr_..."
+                  value={refundForm.refundReference}
+                  onChange={(e) => setRefundForm({ ...refundForm, refundReference: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Refund Reason *</label>
+                <select
+                  className="select"
+                  value={refundForm.reason}
+                  onChange={(e) => setRefundForm({ ...refundForm, reason: e.target.value })}
+                >
+                  <option value="Requested by society administrator">Requested by society administrator</option>
+                  <option value="Duplicate subscription payment">Duplicate subscription payment</option>
+                  <option value="Billing dispute or overcharge adjustment">Billing dispute or overcharge adjustment</option>
+                  <option value="Wrong subscription plan selected">Wrong subscription plan selected</option>
+                  <option value="Cancellation within satisfaction guarantee">Cancellation within satisfaction guarantee</option>
+                  <option value="Other">Other (Specify below)</option>
+                </select>
+              </div>
+
+              {refundForm.reason === 'Other' && (
+                <div className="form-group">
+                  <label>Custom Refund Reason *</label>
+                  <input
+                    type="text"
+                    required
+                    className="input"
+                    placeholder="Enter specific audit reason"
+                    value={refundForm.customReason}
+                    onChange={(e) => setRefundForm({ ...refundForm, customReason: e.target.value })}
+                  />
+                </div>
+              )}
+
+              <div className="form-group">
+                <label>Additional Notes (Optional)</label>
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="Internal audit notes, approvals, or society communication"
+                  value={refundForm.refundNotes}
+                  onChange={(e) => setRefundForm({ ...refundForm, refundNotes: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', marginTop: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setRefundModalPayment(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isSubmittingRefund}
+                  style={{ background: '#7c3aed', borderColor: '#7c3aed' }}
+                >
+                  {isSubmittingRefund
+                    ? 'Processing...'
+                    : refundModalPayment.status === 'REFUNDED'
+                    ? 'Save Updated Refund Details'
+                    : 'Confirm & Issue Refund'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: VIEW SUBSCRIPTION INVOICE / CREDIT NOTE */}
+      {viewingSubInvoice && (
+        <SubscriptionInvoiceModal
+          invoice={viewingSubInvoice}
+          platformSettings={settingsForm}
+          onClose={() => setViewingSubInvoice(null)}
+        />
       )}
     </div>
   );

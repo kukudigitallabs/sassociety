@@ -20,6 +20,10 @@ import {
   PanelLeftOpen,
   Menu,
   X,
+  Image as ImageIcon,
+  FileText,
+  Eye,
+  ExternalLink,
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, openRazorpayCheckout } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
@@ -44,7 +48,12 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
   notify,
 }) => {
   const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'BILLS' | 'COMPLAINTS' | 'PROFILE'>('DASHBOARD');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth > 1024 && window.innerWidth <= 1280;
+    }
+    return false;
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [data, setData] = useState<any | null>(null);
 
@@ -76,6 +85,8 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
     priority: 'MEDIUM',
     attachmentUrl: '',
   });
+  const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
+  const [uploadingComplaintPhoto, setUploadingComplaintPhoto] = useState(false);
   const [suggestionForm, setSuggestionForm] = useState({
     title: '',
     description: '',
@@ -239,8 +250,8 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
             </div>
             {!sidebarCollapsed && (
               <div>
-                <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#fff' }}>Flat {member.flat_number}</div>
-                <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>{society.name}</div>
+                <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--text-sidebar)' }}>Flat {member.flat_number}</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-sidebar-muted)' }}>{society.name}</div>
               </div>
             )}
           </div>
@@ -248,7 +259,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
             <button
               type="button"
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              style={{ background: 'none', border: 'none', color: 'var(--text-sidebar-muted)', cursor: 'pointer' }}
               title="Toggle Sidebar"
               className="no-mobile"
             >
@@ -687,43 +698,175 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                     <textarea rows={3} required className="textarea" value={complaintForm.description} onChange={(e) => setComplaintForm({ ...complaintForm, description: e.target.value })} />
                   </div>
                   <div className="form-group">
-                    <label>Attach Photo / Supporting Image</label>
+                    <label>Attach Photo / Supporting Image (Optional)</label>
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/*,.pdf"
                       className="input"
+                      disabled={uploadingComplaintPhoto}
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
                         try {
+                          setUploadingComplaintPhoto(true);
                           const url = await uploadFileAsBase64(file);
                           setComplaintForm((prev) => ({ ...prev, attachmentUrl: url }));
                           notify('Complaint photo attached.');
                         } catch (err: any) {
                           notify(err.message, 'error');
+                        } finally {
+                          setUploadingComplaintPhoto(false);
                         }
                       }}
                     />
+                    {uploadingComplaintPhoto && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--primary)', marginTop: 4 }}>
+                        Uploading file, please wait...
+                      </div>
+                    )}
+                    {complaintForm.attachmentUrl && !uploadingComplaintPhoto && (
+                      <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem', background: 'var(--bg-subtle)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                        <img
+                          src={complaintForm.attachmentUrl}
+                          alt="Attached preview"
+                          style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid var(--border)' }}
+                          onClick={() => setViewingPhotoUrl(complaintForm.attachmentUrl)}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--success)', fontWeight: 600 }}>Photo attached successfully</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Click image to zoom</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+                          onClick={() => setComplaintForm((prev) => ({ ...prev, attachmentUrl: '' }))}
+                        >
+                          ✕ Remove
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <button type="submit" className="btn btn-primary">Submit Complaint</button>
+                  <button type="submit" className="btn btn-primary" disabled={uploadingComplaintPhoto}>
+                    {uploadingComplaintPhoto ? 'Uploading...' : 'Submit Complaint'}
+                  </button>
                 </form>
 
                 <h4 style={{ marginTop: '1.5rem', marginBottom: '0.75rem' }}>My Complaint History</h4>
                 <div style={{ display: 'grid', gap: '0.65rem' }}>
-                  {complaints.map((c: any) => (
-                    <div key={c.id} className="card" style={{ background: 'var(--bg-subtle)', padding: '0.85rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <strong>{c.complaint_number} • [{c.category}] {c.title}</strong>
-                        <span className={`badge ${c.status === 'RESOLVED' ? 'badge-success' : 'badge-warning'}`}>{c.status}</span>
-                      </div>
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 4 }}>{c.description}</p>
-                      {(c.comments || []).map((cm: any) => (
-                        <div key={cm.id} style={{ fontSize: '0.76rem', color: 'var(--primary)', marginTop: 4 }}>
-                          <strong>{cm.author_name}:</strong> {cm.comment_text}
-                        </div>
-                      ))}
+                  {complaints.length === 0 ? (
+                    <div style={{ padding: '1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No complaints submitted yet.
                     </div>
-                  ))}
+                  ) : (
+                    complaints.map((c: any) => (
+                      <div key={c.id} className="card" style={{ background: 'var(--bg-subtle)', padding: '0.85rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.4rem' }}>
+                          <div>
+                            <strong style={{ fontSize: '0.9rem', color: 'var(--primary)' }}>{c.complaint_number}</strong> • [{c.category}] <strong>{c.title}</strong>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                              Submitted: {(c.created_at || '').slice(0, 16).replace('T', ' ')}
+                            </div>
+                          </div>
+                          <span className={`badge ${c.status === 'RESOLVED' ? 'badge-success' : c.status === 'REJECTED' ? 'badge-danger' : 'badge-warning'}`}>
+                            {c.status}
+                          </span>
+                        </div>
+                        <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.45 }}>{c.description}</p>
+
+                        {/* COMPLAINT ATTACHMENTS */}
+                        {Array.isArray(c.attachments) && c.attachments.length > 0 && (
+                          <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.45rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                              <ImageIcon size={12} color="var(--primary)" /> {c.attachments.length} Attached Photo{c.attachments.length > 1 ? 's' : ''}:
+                            </span>
+                            {c.attachments.map((att: any, idx: number) => {
+                              const fileUrl = att.file_url || att.url;
+                              if (!fileUrl) return null;
+                              const isImg = !att.file_type || att.file_type.includes('image') || /\.(png|jpe?g|webp|gif|svg)($|\?)/i.test(fileUrl);
+                              return isImg ? (
+                                <div
+                                  key={att.id || idx}
+                                  onClick={() => setViewingPhotoUrl(fileUrl)}
+                                  style={{
+                                    position: 'relative',
+                                    cursor: 'pointer',
+                                    border: '1.5px solid var(--border)',
+                                    borderRadius: 6,
+                                    overflow: 'hidden',
+                                    width: 54,
+                                    height: 54,
+                                    backgroundColor: '#0f172a',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+                                  }}
+                                  title="Click to view full image"
+                                >
+                                  <img
+                                    src={fileUrl}
+                                    alt={att.file_name || `Attachment ${idx + 1}`}
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                  <div
+                                    style={{
+                                      position: 'absolute',
+                                      inset: 0,
+                                      background: 'rgba(0,0,0,0.25)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      opacity: 0,
+                                      transition: 'opacity 0.15s',
+                                    }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '0')}
+                                  >
+                                    <Eye size={16} color="#fff" />
+                                  </div>
+                                </div>
+                              ) : (
+                                <a
+                                  key={att.id || idx}
+                                  href={fileUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                                >
+                                  <FileText size={12} /> {att.file_name || 'Document'}
+                                </a>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* RESOLUTION PROOF IMAGE IF RESOLVED */}
+                        {c.resolution_image_url && (
+                          <div style={{ marginTop: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--success)' }}>Resolution Proof:</span>
+                            <img
+                              src={c.resolution_image_url}
+                              alt="Resolution Proof"
+                              onClick={() => setViewingPhotoUrl(c.resolution_image_url)}
+                              style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid var(--border)' }}
+                            />
+                          </div>
+                        )}
+
+                        {/* COMMENTS THREAD */}
+                        {(c.comments || []).filter((cm: any) => !cm.is_internal).map((cm: any) => (
+                          <div key={cm.id} style={{ fontSize: '0.78rem', color: 'var(--primary)', marginTop: 4, padding: '0.35rem 0.5rem', background: 'var(--bg-surface)', borderRadius: 4, borderLeft: '3px solid var(--primary)' }}>
+                            <strong>{cm.author_name}:</strong> {cm.comment_text}
+                          </div>
+                        ))}
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -993,6 +1136,82 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                 <Printer size={15} /> Print Receipt
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PHOTO LIGHTBOX VIEWER */}
+      {viewingPhotoUrl && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.88)',
+            zIndex: 99999,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.25rem',
+            backdropFilter: 'blur(5px)',
+          }}
+          onClick={() => setViewingPhotoUrl(null)}
+        >
+          <div
+            style={{
+              position: 'relative',
+              maxWidth: '92vw',
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '0.65rem',
+                color: '#fff',
+              }}
+            >
+              <span style={{ fontSize: '0.88rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <ImageIcon size={15} /> Attachment Image Preview
+              </span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <a
+                  href={viewingPhotoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-secondary btn-sm"
+                  style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.15)' }}
+                >
+                  <ExternalLink size={13} /> Full Size
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.15)' }}
+                  onClick={() => setViewingPhotoUrl(null)}
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+            <img
+              src={viewingPhotoUrl}
+              alt="Attachment Preview"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '82vh',
+                borderRadius: 8,
+                objectFit: 'contain',
+                boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+              }}
+            />
           </div>
         </div>
       )}

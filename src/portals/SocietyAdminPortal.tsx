@@ -33,9 +33,16 @@ import {
   RotateCcw,
   Trash2,
   AlertTriangle,
+  ExternalLink,
+  Image as ImageIcon,
+  FileText,
+  Eye,
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, downloadCsv, openRazorpayCheckout } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
+import { UpiQrCard } from '../components/UpiQrCard.tsx';
+import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
+import { SubscriptionInvoiceModal } from '../components/SubscriptionInvoiceModal.tsx';
 
 interface SocietyAdminPortalProps {
   user: any;
@@ -66,7 +73,12 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
   const [activeTab, setActiveTab] = useState<
     'DASHBOARD' | 'NOTIFICATIONS' | 'MEMBERS' | 'BILLING' | 'PAYMENTS' | 'MANUAL_PAYMENT' | 'STAFF' | 'COMPLAINTS' | 'EVENTS' | 'ACCOUNTING' | 'SETTINGS'
   >('DASHBOARD');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth > 1024 && window.innerWidth <= 1280;
+    }
+    return false;
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationFilter, setNotificationFilter] = useState<'ALL' | 'UNREAD' | 'READ' | 'SUPER_ADMIN'>('ALL');
   const [selectedNotification, setSelectedNotification] = useState<any | null>(null);
@@ -127,6 +139,15 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
   const [ledgerFlatFilter, setLedgerFlatFilter] = useState('');
   const [ledgerTypeFilter, setLedgerTypeFilter] = useState('');
 
+  // Complaint Filters & Photo Lightbox Modal
+  const [complaintFilter, setComplaintFilter] = useState<'ALL' | 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'REJECTED'>('ALL');
+  const [complaintSearch, setComplaintSearch] = useState('');
+  const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
+  const [replyModalComplaint, setReplyModalComplaint] = useState<any | null>(null);
+  const [replyCommentText, setReplyCommentText] = useState('');
+  const [replyIsInternal, setReplyIsInternal] = useState(false);
+  const [isSubmittingReply, setIsSubmittingReply] = useState(false);
+
   // Modal States
   const [modal, setModal] = useState<
     | 'NONE'
@@ -147,8 +168,10 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     | 'RENEW_SUBSCRIPTION'
     | 'PAY_SUBSCRIPTION_UPI'
   >('NONE');
-  const [subUpiForm, setSubUpiForm] = useState({ utr: '', notes: '' });
+  const [subUpiForm, setSubUpiForm] = useState({ utr: '', notes: '', receiptUrl: '' });
+  const [isUploadingSubReceipt, setIsUploadingSubReceipt] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
+  const [selectedSubInvoice, setSelectedSubInvoice] = useState<any | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
   const [transferHousehold, setTransferHousehold] = useState<any | null>(null);
   const [selectedHouseholdForOpBal, setSelectedHouseholdForOpBal] = useState<{
@@ -204,7 +227,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
   // State for Double Warning Society Database Reset to Zero
   const [resetModalStep, setResetModalStep] = useState<0 | 1 | 2>(0);
   const [resetConfirmInput, setResetConfirmInput] = useState('');
-  const [wipeFlatsAndMembers, setWipeFlatsAndMembers] = useState(false);
+  const [wipeMembersAndFlats, setWipeMembersAndFlats] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
   const [suppBillForm, setSuppBillForm] = useState({
@@ -409,6 +432,89 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
   const allNotificationsList: any[] = dashData?.allSocietyNotifications || dashData?.superAdminNotifications || [];
   const unreadNotificationsCount = allNotificationsList.filter((n) => !n.is_read).length;
 
+  function getNotificationActionLabel(notice: any): string {
+    if (!notice) return 'Open Item';
+    const type = String(notice.notification_type || '').toUpperCase();
+    const title = String(notice.title || '').toLowerCase();
+    const msg = String(notice.message || '').toLowerCase();
+
+    if (type.includes('COMPLAINT') || title.includes('complaint') || msg.includes('complaint')) {
+      return 'Go to Complaint';
+    }
+    if (type.includes('PAYMENT') || title.includes('payment') || msg.includes('payment') || title.includes('receipt')) {
+      return 'Go to Payments';
+    }
+    if (type.includes('ENROL') || type.includes('MEMBER') || title.includes('enrol') || title.includes('flat')) {
+      return 'Go to Members';
+    }
+    if (type.includes('BILL') || title.includes('bill') || title.includes('invoice')) {
+      return 'Go to Billing';
+    }
+    if (type.includes('EVENT') || type.includes('ANNOUNCEMENT') || title.includes('event')) {
+      return 'Go to Events';
+    }
+    if (type.includes('SUBSCRIPTION') || type.includes('RENEWAL') || type.includes('TRIAL') || type.includes('PLATFORM')) {
+      return 'Go to Subscription';
+    }
+    return 'Open Section';
+  }
+
+  async function handleNotificationRedirect(notice: any) {
+    if (!notice) return;
+    if (!notice.is_read) {
+      try {
+        await apiFetch('/api/notifications/mark-read', {
+          method: 'POST',
+          body: { notificationId: notice.id, isRead: true },
+        });
+        refreshCurrentTab();
+      } catch {}
+    }
+
+    const type = String(notice.notification_type || '').toUpperCase();
+    const title = String(notice.title || '').toLowerCase();
+    const msg = String(notice.message || '').toLowerCase();
+    const link = String(notice.link_url || notice.linkUrl || '');
+
+    if (link.includes('tab=')) {
+      const match = link.match(/tab=([A-Z_]+)/i);
+      if (match && match[1]) {
+        const targetTab = match[1].toUpperCase();
+        if (['DASHBOARD', 'NOTIFICATIONS', 'MEMBERS', 'BILLING', 'PAYMENTS', 'MANUAL_PAYMENT', 'STAFF', 'COMPLAINTS', 'EVENTS', 'ACCOUNTING', 'SETTINGS'].includes(targetTab)) {
+          setActiveTab(targetTab as any);
+          return;
+        }
+      }
+    }
+
+    if (type.includes('COMPLAINT') || title.includes('complaint') || msg.includes('complaint')) {
+      const cmpMatch = notice.title.match(/CMP-\d+/i) || notice.message.match(/CMP-\d+/i);
+      if (cmpMatch) {
+        setComplaintSearch(cmpMatch[0]);
+      }
+      setActiveTab('COMPLAINTS');
+      notify(`Opened Complaints for: ${notice.title}`);
+    } else if (type.includes('PAYMENT') || title.includes('payment') || msg.includes('payment') || title.includes('receipt')) {
+      setActiveTab('PAYMENTS');
+      notify(`Opened Payments for: ${notice.title}`);
+    } else if (type.includes('ENROL') || type.includes('MEMBER') || title.includes('enrol') || title.includes('flat')) {
+      setActiveTab('MEMBERS');
+      notify(`Opened Members for: ${notice.title}`);
+    } else if (type.includes('BILL') || title.includes('bill') || title.includes('invoice')) {
+      setActiveTab('BILLING');
+      notify(`Opened Billing for: ${notice.title}`);
+    } else if (type.includes('EVENT') || type.includes('ANNOUNCEMENT') || title.includes('event')) {
+      setActiveTab('EVENTS');
+      notify(`Opened Events for: ${notice.title}`);
+    } else if (type.includes('SUBSCRIPTION') || type.includes('RENEWAL') || type.includes('TRIAL') || type.includes('PLATFORM')) {
+      setActiveTab('DASHBOARD');
+      notify(`Opened Subscription: ${notice.title}`);
+    } else {
+      setSelectedNotification(notice);
+      setActiveTab('NOTIFICATIONS');
+    }
+  }
+
   const availableBlocks = Array.from(
     new Set([
       ...(membersData.blocks || []).map((b: any) => b.name),
@@ -432,10 +538,10 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             </div>
             {!sidebarCollapsed && (
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-sidebar)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {currentSociety.name || 'Society Panel'}
                 </div>
-                <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-sidebar-muted)' }}>
                   {user.role === 'SOCIETY_ADMIN' ? 'Society Administrator' : 'Authorized Staff'}
                 </div>
               </div>
@@ -445,7 +551,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             <button
               type="button"
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              style={{ background: 'none', border: 'none', color: 'var(--text-sidebar-muted)', cursor: 'pointer' }}
               title="Toggle Sidebar"
               className="no-mobile"
             >
@@ -563,15 +669,6 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
           </div>
 
           <div className="topbar-actions">
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              style={{ color: '#ef4444', borderColor: '#fca5a5' }}
-              onClick={() => { setResetModalStep(1); setResetConfirmInput(''); }}
-              title="Reset Society Database to Zero (Double Confirmation)"
-            >
-              <RotateCcw size={14} /> <span>Reset to Zero</span>
-            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={refreshCurrentTab} title="Refresh Data">
               <RefreshCw size={14} /> <span>Refresh</span>
             </button>
@@ -801,13 +898,15 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   );
                 }
 
-                // When renewal is due (<= 30 days or unpaid/trial): display full dues & renewal notification card
+                // When renewal is due (<= 30 days or unpaid/trial/refunded): display full dues & renewal notification card
+                const isRefunded = Boolean(subSummary.isRefunded || subSummary.paymentStatus === 'REFUNDED');
+
                 return (
                   <div
                     className="card"
                     style={{
-                      background: 'var(--warning-bg)',
-                      borderColor: 'var(--warning)',
+                      background: isRefunded ? '#fef2f2' : 'var(--warning-bg)',
+                      borderColor: isRefunded ? '#f87171' : 'var(--warning)',
                       borderWidth: '1.5px',
                       padding: '1.1rem 1.35rem',
                       display: 'grid',
@@ -832,55 +931,68 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                             width: 36,
                             height: 36,
                             borderRadius: 10,
-                            background: '#f59e0b',
+                            background: isRefunded ? '#dc2626' : '#f59e0b',
                             color: '#fff',
                           }}
                         >
-                          <Bell size={18} />
+                          {isRefunded ? <RotateCcw size={18} /> : <Bell size={18} />}
                         </span>
                         <div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            <h4 style={{ fontSize: '0.98rem', margin: 0 }}>
-                              Super Admin Subscription Renewal & Approval Status
+                            <h4 style={{ fontSize: '0.98rem', margin: 0, color: isRefunded ? '#991b1b' : 'inherit' }}>
+                              {isRefunded
+                                ? 'Subscription Refund Issued — Immediate Action Required'
+                                : 'Super Admin Subscription Renewal & Approval Status'}
                             </h4>
                             <span
                               className={`badge ${
-                                subSummary.subscriptionStatus === 'ACTIVE'
+                                isRefunded
+                                  ? 'badge-danger'
+                                  : subSummary.subscriptionStatus === 'ACTIVE'
                                   ? 'badge-success'
                                   : subSummary.subscriptionStatus === 'TRIAL'
                                   ? 'badge-info'
                                   : 'badge-warning'
                               }`}
                             >
-                              Status: {subSummary.subscriptionStatus}
+                              Status: {isRefunded ? 'SUSPENDED' : subSummary.subscriptionStatus}
                             </span>
                             <span
                               className={`badge ${
-                                subSummary.approvalStatus === 'APPROVED' ? 'badge-success' : 'badge-warning'
+                                isRefunded
+                                  ? 'badge-danger'
+                                  : subSummary.approvalStatus === 'APPROVED' ? 'badge-success' : 'badge-warning'
                               }`}
                             >
-                              Super Admin Approval: {subSummary.approvalStatus}
+                              Approval: {isRefunded ? 'PENDING RENEWAL' : subSummary.approvalStatus}
                             </span>
-                            <span className="badge badge-warning">
-                              Payment: {subSummary.paymentStatus === 'PAID' ? 'RENEWAL DUE' : 'DUE FOR RENEWAL / APPROVAL'}
+                            <span
+                              className="badge"
+                              style={isRefunded ? { background: '#ede9fe', color: '#6d28d9', borderColor: '#c4b5fd' } : {}}
+                            >
+                              Payment: {isRefunded ? 'REFUND ISSUED' : (subSummary.paymentStatus === 'PAID' ? 'RENEWAL DUE' : 'DUE FOR RENEWAL')}
                             </span>
                           </div>
-                          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 3 }}>
-                            {subSummary.daysRemaining <= 0
+                          <p style={{ fontSize: '0.8rem', color: isRefunded ? '#7f1d1d' : 'var(--text-muted)', marginTop: 3 }}>
+                            {isRefunded
+                              ? `A refund of ${formatCurrency(subSummary.refundDetails?.amount || subSummary.totalAmountDue)} was issued on ${(subSummary.refundDetails?.date || '').slice(0, 10)}${subSummary.refundDetails?.reference ? ` (Ref: ${subSummary.refundDetails.reference})` : ''}. Reason: "${subSummary.refundDetails?.reason || 'Subscription Refund'}". Your active society subscription is currently suspended. Please renew below to restore active resident services.`
+                              : (subSummary.daysRemaining <= 0
                               ? 'Your subscription is overdue. Please complete renewal payment immediately to avoid service interruption.'
-                              : `Subscription renewal is due in ${subSummary.daysRemaining} days (${(subSummary.expiryDate || '').slice(0, 10)}). Complete payment for instant renewal and approval.`}
+                              : `Subscription renewal is due in ${subSummary.daysRemaining} days (${(subSummary.expiryDate || '').slice(0, 10)}). Complete payment for instant renewal and approval.`)}
                           </p>
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => setModal('PAY_SUBSCRIPTION_UPI')}
-                        >
-                          <QrCode size={15} /> Pay via UPI / Bank Transfer
-                        </button>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        {subSummary?.upiPaymentEnabled !== false && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setModal('PAY_SUBSCRIPTION_UPI')}
+                          >
+                            <QrCode size={15} /> Pay via UPI / Bank Transfer
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="btn btn-secondary"
@@ -888,47 +1000,53 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         >
                           <Bell size={15} /> Notifications List ({allNotificationsList.length})
                         </button>
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={async () => {
-                            try {
-                              await openRazorpayCheckout({
-                                amountRupees: subSummary.totalAmountDue,
-                                currency: 'INR',
-                                receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
-                                merchantName: 'SocietyOS Platform Subscription',
-                                description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
-                                prefill: {
-                                  name: user?.fullName || user?.email || currentSociety.name,
-                                  email: user?.email || currentSociety.contact_email,
-                                  contact: user?.phone || currentSociety.contact_phone,
-                                },
-                                isSubscription: true,
-                                societyId: currentSociety.id,
-                                planId: subSummary.planId,
-                                subscriptionPaymentId: subSummary.pendingInvoice?.id,
-                                onSuccess: (verified: any) => {
-                                  notify(
-                                    verified?.message ||
-                                      `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified! Society is ACTIVE & APPROVED.`
-                                  );
-                                  refreshCurrentTab();
-                                },
-                                onDismiss: () => {
-                                  notify('Subscription checkout was cancelled.', 'error');
-                                },
-                                onError: (errMsg: string) => {
-                                  notify(errMsg || 'Subscription payment verification failed.', 'error');
-                                },
-                              });
-                            } catch (err: any) {
-                              notify(err.message || 'Subscription payment was cancelled or failed.', 'error');
-                            }
-                          }}
-                        >
-                          <CreditCard size={15} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Subscription Now
-                        </button>
+                        {subSummary?.razorpayEnabled !== false ? (
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={async () => {
+                              try {
+                                await openRazorpayCheckout({
+                                  amountRupees: subSummary.totalAmountDue,
+                                  currency: 'INR',
+                                  receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
+                                  merchantName: 'SocietyOS Platform Subscription',
+                                  description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
+                                  prefill: {
+                                    name: user?.fullName || user?.email || currentSociety.name,
+                                    email: user?.email || currentSociety.contact_email,
+                                    contact: user?.phone || currentSociety.contact_phone,
+                                  },
+                                  isSubscription: true,
+                                  societyId: currentSociety.id,
+                                  planId: subSummary.planId,
+                                  subscriptionPaymentId: subSummary.pendingInvoice?.id,
+                                  onSuccess: (verified: any) => {
+                                    notify(
+                                      verified?.message ||
+                                        `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified! Society is ACTIVE & APPROVED.`
+                                    );
+                                    refreshCurrentTab();
+                                  },
+                                  onDismiss: () => {
+                                    notify('Subscription checkout was cancelled.', 'error');
+                                  },
+                                  onError: (errMsg: string) => {
+                                    notify(errMsg || 'Subscription payment verification failed.', 'error');
+                                  },
+                                });
+                              } catch (err: any) {
+                                notify(err.message || 'Subscription payment was cancelled or failed.', 'error');
+                              }
+                            }}
+                          >
+                            <CreditCard size={15} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Subscription Now
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', background: 'var(--surface-sunken, #f1f5f9)', padding: '0.35rem 0.65rem', borderRadius: 6, border: '1px solid var(--border)' }}>
+                            Online Payment Gateway is currently disabled. Please use direct UPI QR or bank transfer.
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -1036,98 +1154,114 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         </div>
                       </div>
                     </div>
+                  </div>
+                );
+              })()}
 
-                    {/* Unread Notifications from Super Admin (Removed from Dashboard when Marked as Read & Redirected to Notifications Page) */}
-                    {unreadSuperAdminNotices.length > 0 && (
+              {/* UNIFIED UNREAD NOTIFICATIONS CARD ON DASHBOARD (COMPLAINTS, PAYMENTS, MEMBERS, SUPER ADMIN NOTICES) */}
+              {(() => {
+                const unreadDashboardNotices = (allNotificationsList || []).filter((n: any) => !n.is_read);
+                if (unreadDashboardNotices.length === 0) return null;
+                return (
+                  <div
+                    className="card"
+                    style={{
+                      background: 'var(--bg-surface)',
+                      border: '1.5px solid var(--primary)',
+                      borderRadius: 10,
+                      padding: '0.9rem 1.15rem',
+                      display: 'grid',
+                      gap: '0.65rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <Bell size={16} /> Unread Notifications ({unreadDashboardNotices.length})
+                      </span>
+                      <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '0.25rem 0.65rem', fontSize: '0.74rem' }}
+                          onClick={() => setActiveTab('NOTIFICATIONS')}
+                        >
+                          All Notifications ({allNotificationsList.length})
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '0.25rem 0.65rem', fontSize: '0.74rem' }}
+                          onClick={async () => {
+                            try {
+                              await apiFetch('/api/notifications/mark-read', { method: 'POST', body: {} });
+                              notify('All notifications marked as read and archived.');
+                              refreshCurrentTab();
+                            } catch (err: any) {
+                              notify(err.message, 'error');
+                            }
+                          }}
+                        >
+                          <CheckCircle2 size={13} /> Mark All Read
+                        </button>
+                      </div>
+                    </div>
+                    {unreadDashboardNotices.map((notice: any) => (
                       <div
+                        key={notice.id}
                         style={{
-                          background: 'var(--bg-surface)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 10,
-                          padding: '0.8rem 1rem',
-                          display: 'grid',
-                          gap: '0.55rem',
+                          padding: '0.7rem 0.95rem',
+                          borderRadius: 8,
+                          background: 'var(--bg-subtle)',
+                          borderLeft: '4px solid var(--primary)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '0.85rem',
+                          flexWrap: 'wrap',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                          <span style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-                            Unread Notifications from Super Admin ({unreadSuperAdminNotices.length})
-                          </span>
+                        <div style={{ flex: 1, minWidth: 240 }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                            {notice.title}
+                            <span className="badge badge-warning" style={{ fontSize: '0.68rem', padding: '0.15rem 0.4rem' }}>UNREAD</span>
+                            <span className="badge badge-secondary" style={{ fontSize: '0.68rem', padding: '0.15rem 0.4rem' }}>{notice.notification_type}</span>
+                          </div>
+                          <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: 3 }}>
+                            {notice.message}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                            Received: {(notice.created_at || '').slice(0, 16).replace('T', ' ')}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handleNotificationRedirect(notice)}
+                          >
+                            <ExternalLink size={13} /> {getNotificationActionLabel(notice)}
+                          </button>
                           <button
                             type="button"
                             className="btn btn-secondary btn-sm"
-                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.74rem' }}
                             onClick={async () => {
                               try {
-                                const latestNotice = unreadSuperAdminNotices[0];
-                                await apiFetch('/api/notifications/mark-read', { method: 'POST', body: {} });
-                                if (latestNotice) {
-                                  setSelectedNotification({ ...latestNotice, is_read: 1 });
-                                }
-                                setNotificationFilter('ALL');
-                                notify('All notifications marked as read, removed from Dashboard, and saved under Notifications.');
-                                setActiveTab('NOTIFICATIONS');
+                                await apiFetch('/api/notifications/mark-read', {
+                                  method: 'POST',
+                                  body: { notificationId: notice.id, isRead: true },
+                                });
+                                notify('Notification marked as read.');
+                                refreshCurrentTab();
                               } catch (err: any) {
                                 notify(err.message, 'error');
                               }
                             }}
                           >
-                            <CheckCircle2 size={13} /> Mark All Read & View in Notifications Page
+                            <CheckCircle2 size={13} /> Mark Read
                           </button>
                         </div>
-                        {unreadSuperAdminNotices.map((notice: any) => (
-                          <div
-                            key={notice.id}
-                            style={{
-                              padding: '0.65rem 0.85rem',
-                              borderRadius: 8,
-                              background: 'rgba(245, 158, 11, 0.12)',
-                              borderLeft: '3px solid #f59e0b',
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              gap: '0.85rem',
-                              flexWrap: 'wrap',
-                            }}
-                          >
-                            <div style={{ flex: 1, minWidth: 240 }}>
-                              <div style={{ fontWeight: 700, fontSize: '0.86rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                {notice.title}
-                                <span className="badge badge-warning">UNREAD</span>
-                              </div>
-                              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: 3 }}>
-                                {notice.message}
-                              </div>
-                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                                Received: {(notice.created_at || '').slice(0, 16).replace('T', ' ')}
-                              </div>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                className="btn btn-primary btn-sm"
-                                onClick={async () => {
-                                  try {
-                                    await apiFetch('/api/notifications/mark-read', {
-                                      method: 'POST',
-                                      body: { notificationId: notice.id },
-                                    });
-                                    setSelectedNotification({ ...notice, is_read: 1 });
-                                    setNotificationFilter('ALL');
-                                    notify('Notification marked as read, removed from Dashboard, and opened in Notifications page.');
-                                    setActiveTab('NOTIFICATIONS');
-                                  } catch (err: any) {
-                                    notify(err.message, 'error');
-                                  }
-                                }}
-                              >
-                                <CheckCircle2 size={13} /> Mark as Read
-                              </button>
-                            </div>
-                          </div>
-                        ))}
                       </div>
-                    )}
+                    ))}
                   </div>
                 );
               })()}
@@ -2274,141 +2408,312 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
           )}
 
           {/* TAB 6: COMPLAINTS & SUGGESTIONS */}
-          {activeTab === 'COMPLAINTS' && (
-            <>
-              <div className="card">
-                <h3>Resident Complaints & Resolution Workflow</h3>
-                <div className="table-wrap" style={{ marginTop: '1rem' }}>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>ID & Flat</th>
-                        <th>Complaint Details</th>
-                        <th>Priority</th>
-                        <th>Assigned Staff</th>
-                        <th>Status</th>
-                        {can('manage_complaints') && <th>Update & Respond</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(complaintsData?.complaints || []).map((c: any) => (
-                        <tr key={c.id}>
-                          <td>
-                            <strong>{c.complaint_number}</strong>
-                            <div style={{ fontSize: '0.75rem' }}>Flat {c.flat_number} ({c.member_name})</div>
-                          </td>
-                          <td>
-                            <div style={{ fontWeight: 700 }}>[{c.category}] {c.title}</div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{c.description}</div>
-                            {(c.comments || []).map((cm: any) => (
-                              <div key={cm.id} style={{ fontSize: '0.75rem', marginTop: 4, color: cm.is_internal ? 'var(--warning)' : 'var(--primary)' }}>
-                                <strong>{cm.author_name} {cm.is_internal ? '(Internal Note)' : ''}:</strong> {cm.comment_text}
-                              </div>
-                            ))}
-                          </td>
-                          <td><span className="badge badge-info">{c.priority}</span></td>
-                          <td>{c.assigned_staff_name || 'Unassigned'}</td>
-                          <td>
-                            <span className={`badge ${c.status === 'RESOLVED' ? 'badge-success' : 'badge-warning'}`}>
-                              {c.status}
-                            </span>
-                          </td>
-                          {can('manage_complaints') && (
-                            <td>
-                              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                                <select
-                                  className="select"
-                                  style={{ width: 'auto', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}
-                                  value={c.status}
-                                  onChange={async (e) => {
-                                    await apiFetch(`/api/society/complaints/${c.id}`, {
-                                      method: 'PUT',
-                                      body: { status: e.target.value },
-                                    });
-                                    notify(`Complaint updated to ${e.target.value}.`);
-                                    refreshCurrentTab();
-                                  }}
-                                >
-                                  <option value="SUBMITTED">SUBMITTED</option>
-                                  <option value="IN_PROGRESS">IN_PROGRESS</option>
-                                  <option value="RESOLVED">RESOLVED</option>
-                                  <option value="REJECTED">REJECTED</option>
-                                </select>
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary btn-sm"
-                                  onClick={async () => {
-                                    const note = window.prompt('Enter response for resident:', 'Our maintenance team is resolving this issue.');
-                                    if (!note) return;
-                                    await apiFetch(`/api/society/complaints/${c.id}`, {
-                                      method: 'PUT',
-                                      body: { commentText: note, isInternal: false },
-                                    });
-                                    notify('Response posted.');
-                                    refreshCurrentTab();
-                                  }}
-                                >
-                                  Reply
-                                </button>
-                              </div>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+          {activeTab === 'COMPLAINTS' && (() => {
+            const allComps = complaintsData?.complaints || [];
+            const filteredComps = allComps.filter((c: any) => {
+              if (complaintFilter !== 'ALL' && c.status !== complaintFilter) return false;
+              if (complaintSearch.trim()) {
+                const q = complaintSearch.toLowerCase().trim();
+                const str = `${c.complaint_number || ''} ${c.flat_number || ''} ${c.member_name || ''} ${c.title || ''} ${c.description || ''} ${c.category || ''}`.toLowerCase();
+                if (!str.includes(q)) return false;
+              }
+              return true;
+            });
 
-              <div className="card">
-                <h3>Resident Suggestions Box</h3>
-                <div className="table-wrap" style={{ marginTop: '1rem' }}>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Flat & Member</th>
-                        <th>Suggestion</th>
-                        <th>Status</th>
-                        <th>Admin Response</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(complaintsData?.suggestions || []).map((sg: any) => (
-                        <tr key={sg.id}>
-                          <td><strong>{sg.flat_number}</strong> — {sg.member_name}</td>
-                          <td>
-                            <strong>{sg.title}</strong>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{sg.description}</div>
-                          </td>
-                          <td><span className="badge badge-info">{sg.status}</span></td>
-                          <td>{sg.admin_response || '—'}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={async () => {
-                                const resp = window.prompt('Enter management response to suggestion:', sg.admin_response || 'Thank you! We will review this in the next RWA meeting.');
-                                if (!resp) return;
-                                await apiFetch(`/api/society/suggestions/${sg.id}`, {
-                                  method: 'PUT',
-                                  body: { status: 'ACKNOWLEDGED', adminResponse: resp },
-                                });
-                                notify('Suggestion response saved.');
-                                refreshCurrentTab();
-                              }}
-                            >
-                              Respond
-                            </button>
-                          </td>
+            return (
+              <>
+                <div className="card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div>
+                      <h3 style={{ margin: 0 }}>Resident Complaints & Resolution Workflow</h3>
+                      <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                        Review resident tickets, inspect attached photos and evidence, assign maintenance staff, and publish official resolution updates.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Status Filters and Search Bar */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '0.75rem',
+                      marginTop: '1rem',
+                      marginBottom: '0.75rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                      {(['ALL', 'SUBMITTED', 'IN_PROGRESS', 'RESOLVED', 'REJECTED'] as const).map((st) => {
+                        const count = st === 'ALL' ? allComps.length : allComps.filter((c: any) => c.status === st).length;
+                        return (
+                          <button
+                            key={st}
+                            type="button"
+                            className={`btn btn-sm ${complaintFilter === st ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setComplaintFilter(st)}
+                          >
+                            {st === 'ALL' ? 'All' : st} ({count})
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        className="input"
+                        style={{ minWidth: 230, padding: '0.35rem 0.65rem', fontSize: '0.82rem' }}
+                        placeholder="Search complaint #, flat, resident, title..."
+                        value={complaintSearch}
+                        onChange={(e) => setComplaintSearch(e.target.value)}
+                      />
+                      {complaintSearch && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setComplaintSearch('')}
+                          title="Clear Search"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="table-wrap" style={{ marginTop: '0.5rem' }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>ID & Flat</th>
+                          <th>Complaint Details & Attachments</th>
+                          <th>Priority</th>
+                          <th>Assigned Staff</th>
+                          <th>Status</th>
+                          {can('manage_complaints') && <th>Update & Respond</th>}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {filteredComps.length === 0 ? (
+                          <tr>
+                            <td colSpan={can('manage_complaints') ? 6 : 5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                              No complaints found matching the selected filter.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredComps.map((c: any) => {
+                            const isHighlighted = complaintSearch && (
+                              c.complaint_number?.toLowerCase().includes(complaintSearch.toLowerCase()) ||
+                              c.title?.toLowerCase().includes(complaintSearch.toLowerCase())
+                            );
+
+                            return (
+                              <tr key={c.id} style={isHighlighted ? { background: 'rgba(59, 130, 246, 0.08)', outline: '2px solid rgba(59, 130, 246, 0.4)' } : undefined}>
+                                <td>
+                                  <strong style={{ fontSize: '0.92rem', color: 'var(--primary)' }}>{c.complaint_number}</strong>
+                                  <div style={{ fontSize: '0.78rem', marginTop: 2 }}>Flat {c.flat_number} ({c.member_name})</div>
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                                    {(c.created_at || '').slice(0, 16).replace('T', ' ')}
+                                  </div>
+                                </td>
+                                <td style={{ maxWidth: 460 }}>
+                                  <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>[{c.category}] {c.title}</div>
+                                  <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: 3 }}>{c.description}</div>
+
+                                  {/* COMPLAINT ATTACHMENTS / EVIDENCE PHOTOS */}
+                                  {Array.isArray(c.attachments) && c.attachments.length > 0 && (
+                                    <div style={{ marginTop: '0.6rem', padding: '0.5rem 0.65rem', background: 'var(--bg-subtle)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.4rem' }}>
+                                        <ImageIcon size={13} color="var(--primary)" /> {c.attachments.length} Attached Photo{c.attachments.length > 1 ? 's' : ''} / File{c.attachments.length > 1 ? 's' : ''}:
+                                      </span>
+                                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                                        {c.attachments.map((att: any, idx: number) => {
+                                          const fileUrl = att.file_url || att.url;
+                                          if (!fileUrl) return null;
+                                          const isImg = !att.file_type || att.file_type.includes('image') || /\.(png|jpe?g|webp|gif|svg)($|\?)/i.test(fileUrl);
+                                          return isImg ? (
+                                            <div
+                                              key={att.id || idx}
+                                              onClick={() => setViewingPhotoUrl(fileUrl)}
+                                              style={{
+                                                position: 'relative',
+                                                cursor: 'pointer',
+                                                border: '1.5px solid var(--border)',
+                                                borderRadius: 6,
+                                                overflow: 'hidden',
+                                                width: 62,
+                                                height: 62,
+                                                backgroundColor: '#0f172a',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                                              }}
+                                              title="Click to view full image"
+                                            >
+                                              <img
+                                                src={fileUrl}
+                                                alt={att.file_name || `Attachment ${idx + 1}`}
+                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                onError={(e) => {
+                                                  (e.target as HTMLElement).style.display = 'none';
+                                                }}
+                                              />
+                                              <div
+                                                style={{
+                                                  position: 'absolute',
+                                                  inset: 0,
+                                                  background: 'rgba(0,0,0,0.3)',
+                                                  display: 'flex',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'center',
+                                                  opacity: 0,
+                                                  transition: 'opacity 0.15s',
+                                                }}
+                                                onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                                                onMouseLeave={(e) => (e.currentTarget.style.opacity = '0')}
+                                              >
+                                                <Eye size={18} color="#fff" />
+                                              </div>
+                                            </div>
+                                          ) : (
+                                            <a
+                                              key={att.id || idx}
+                                              href={fileUrl}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="btn btn-secondary btn-sm"
+                                              style={{ padding: '0.25rem 0.5rem', fontSize: '0.74rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                                            >
+                                              <FileText size={13} /> {att.file_name || 'Document'}
+                                            </a>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* RESOLUTION PROOF IMAGE IF RESOLVED */}
+                                  {c.resolution_image_url && (
+                                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <span style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--success)' }}>Resolution Proof:</span>
+                                      <img
+                                        src={c.resolution_image_url}
+                                        alt="Resolution Proof"
+                                        onClick={() => setViewingPhotoUrl(c.resolution_image_url)}
+                                        style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1.5px solid var(--border)' }}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {/* COMMENTS THREAD */}
+                                  {(c.comments || []).map((cm: any) => (
+                                    <div key={cm.id} style={{ fontSize: '0.76rem', marginTop: 4, color: cm.is_internal ? 'var(--warning)' : 'var(--primary)' }}>
+                                      <strong>{cm.author_name} {cm.is_internal ? '(Internal Note)' : ''}:</strong> {cm.comment_text}
+                                    </div>
+                                  ))}
+                                </td>
+                                <td><span className="badge badge-info">{c.priority}</span></td>
+                                <td>{c.assigned_staff_name || 'Unassigned'}</td>
+                                <td>
+                                  <span className={`badge ${c.status === 'RESOLVED' ? 'badge-success' : c.status === 'REJECTED' ? 'badge-danger' : 'badge-warning'}`}>
+                                    {c.status}
+                                  </span>
+                                </td>
+                                {can('manage_complaints') && (
+                                  <td>
+                                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                      <select
+                                        className="select"
+                                        style={{ width: 'auto', padding: '0.25rem 0.5rem', fontSize: '0.78rem' }}
+                                        value={c.status}
+                                        onChange={async (e) => {
+                                          await apiFetch(`/api/society/complaints/${c.id}`, {
+                                            method: 'PUT',
+                                            body: { status: e.target.value },
+                                          });
+                                          notify(`Complaint updated to ${e.target.value}.`);
+                                          refreshCurrentTab();
+                                        }}
+                                      >
+                                        <option value="SUBMITTED">SUBMITTED</option>
+                                        <option value="IN_PROGRESS">IN_PROGRESS</option>
+                                        <option value="RESOLVED">RESOLVED</option>
+                                        <option value="REJECTED">REJECTED</option>
+                                      </select>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => {
+                                          setReplyModalComplaint(c);
+                                          setReplyCommentText('');
+                                          setReplyIsInternal(false);
+                                        }}
+                                      >
+                                        Reply
+                                      </button>
+                                    </div>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            </>
-          )}
+
+                <div className="card">
+                  <h3>Resident Suggestions Box</h3>
+                  <div className="table-wrap" style={{ marginTop: '1rem' }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Flat & Member</th>
+                          <th>Suggestion</th>
+                          <th>Status</th>
+                          <th>Admin Response</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(complaintsData?.suggestions || []).map((sg: any) => (
+                          <tr key={sg.id}>
+                            <td><strong>{sg.flat_number}</strong> — {sg.member_name}</td>
+                            <td>
+                              <strong>{sg.title}</strong>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{sg.description}</div>
+                            </td>
+                            <td><span className="badge badge-info">{sg.status}</span></td>
+                            <td>{sg.admin_response || '—'}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={async () => {
+                                  const resp = window.prompt('Enter management response to suggestion:', sg.admin_response || 'Thank you! We will review this in the next RWA meeting.');
+                                  if (!resp) return;
+                                  await apiFetch(`/api/society/suggestions/${sg.id}`, {
+                                    method: 'PUT',
+                                    body: { status: 'ACKNOWLEDGED', adminResponse: resp },
+                                  });
+                                  notify('Suggestion response saved.');
+                                  refreshCurrentTab();
+                                }}
+                              >
+                                Respond
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
 
           {/* TAB 7: EVENTS, NOTICES & ANNOUNCEMENTS */}
           {activeTab === 'EVENTS' && (
@@ -3260,6 +3565,13 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => handleNotificationRedirect(selectedNotification)}
+                        >
+                          <ExternalLink size={14} /> {getNotificationActionLabel(selectedNotification)}
+                        </button>
                         {selectedNotification.is_read ? (
                           <button
                             type="button"
@@ -3356,44 +3668,171 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                           )}
                         </div>
                         {isRenewalDue && (
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-sm"
-                            onClick={async () => {
-                              try {
-                                await openRazorpayCheckout({
-                                  amountRupees: subSummary.totalAmountDue,
-                                  currency: 'INR',
-                                  receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
-                                  merchantName: 'SocietyOS Platform Subscription',
-                                  description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
-                                  prefill: {
-                                    name: user?.fullName || user?.email || currentSociety.name,
-                                    email: user?.email || currentSociety.contact_email,
-                                    contact: user?.phone || currentSociety.contact_phone,
-                                  },
-                                  isSubscription: true,
-                                  societyId: currentSociety.id,
-                                  planId: subSummary.planId,
-                                  subscriptionPaymentId: subSummary.pendingInvoice?.id,
-                                  onSuccess: (verified: any) => {
-                                    notify(
-                                      verified?.message ||
-                                        `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified!`
-                                    );
-                                    refreshCurrentTab();
-                                  },
-                                });
-                              } catch (err: any) {
-                                notify(err.message || 'Subscription checkout failed.', 'error');
-                              }
-                            }}
-                          >
-                            <CreditCard size={14} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Now
-                          </button>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                            {subSummary?.razorpayEnabled !== false && (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={async () => {
+                                  try {
+                                    await openRazorpayCheckout({
+                                      amountRupees: subSummary.totalAmountDue,
+                                      currency: 'INR',
+                                      receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
+                                      merchantName: 'SocietyOS Platform Subscription',
+                                      description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
+                                      prefill: {
+                                        name: user?.fullName || user?.email || currentSociety.name,
+                                        email: user?.email || currentSociety.contact_email,
+                                        contact: user?.phone || currentSociety.contact_phone,
+                                      },
+                                      isSubscription: true,
+                                      societyId: currentSociety.id,
+                                      planId: subSummary.planId,
+                                      subscriptionPaymentId: subSummary.pendingInvoice?.id,
+                                      onSuccess: (verified: any) => {
+                                        notify(
+                                          verified?.message ||
+                                            `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified!`
+                                        );
+                                        refreshCurrentTab();
+                                      },
+                                    });
+                                  } catch (err: any) {
+                                    notify(err.message || 'Subscription checkout failed.', 'error');
+                                  }
+                                }}
+                              >
+                                <CreditCard size={14} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Now
+                              </button>
+                            )}
+                            {subSummary?.upiPaymentEnabled !== false && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setModal('PAY_SUBSCRIPTION_UPI')}
+                              >
+                                <QrCode size={14} /> Pay via UPI / QR
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Platform Subscription Invoices & Payment Receipts */}
+                {((dashData?.subscriptionInvoices && dashData.subscriptionInvoices.length > 0) || dashData?.subscriptionSummary?.isRefunded) && (
+                  <div className="card" style={{ marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Receipt size={17} color="var(--primary)" />
+                        <h4 style={{ margin: 0 }}>Platform Subscription Invoices & Payment Receipts</h4>
+                      </div>
+                      <span className="badge badge-neutral" style={{ fontSize: '0.75rem' }}>
+                        {(dashData?.subscriptionInvoices || []).length} Invoices
+                      </span>
+                    </div>
+
+                    <div className="table-wrap">
+                      <table className="data-table data-table-wide">
+                        <thead>
+                          <tr>
+                            <th style={{ minWidth: 155, whiteSpace: 'nowrap' }}>Invoice #</th>
+                            <th style={{ minWidth: 130 }}>Plan & Cycle</th>
+                            <th style={{ minWidth: 130, whiteSpace: 'nowrap' }}>Amount</th>
+                            <th style={{ minWidth: 160 }}>Method</th>
+                            <th style={{ minWidth: 140, whiteSpace: 'nowrap' }}>Status</th>
+                            <th style={{ minWidth: 100, whiteSpace: 'nowrap' }}>Date</th>
+                            <th style={{ minWidth: 160 }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(dashData?.subscriptionInvoices || []).map((inv: any) => (
+                            <tr key={inv.id}>
+                              <td style={{ whiteSpace: 'nowrap' }}>
+                                <strong>{inv.invoice_number}</strong>
+                              </td>
+                              <td>{inv.plan_name || 'Platform Plan'}</td>
+                              <td style={{ whiteSpace: 'nowrap' }}>
+                                <strong style={{ color: 'var(--brand)' }}>{formatCurrency(inv.total_amount)}</strong>
+                                {inv.tax_amount > 0 && (
+                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                    Incl. {formatCurrency(inv.tax_amount)} tax
+                                  </div>
+                                )}
+                              </td>
+                              <td>
+                                <span className="badge badge-neutral" style={{ fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
+                                  {inv.payment_gateway || 'UPI'}
+                                </span>
+                                {inv.gateway_payment_id && (
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', wordBreak: 'break-all' }}>
+                                    Ref: <code>{inv.gateway_payment_id}</code>
+                                  </div>
+                                )}
+                              </td>
+                              <td>
+                                {inv.status === 'PAID' && (
+                                  <span className="badge badge-success" style={{ whiteSpace: 'nowrap' }}>
+                                    <CheckCircle2 size={11} style={{ marginRight: 3 }} /> Paid
+                                  </span>
+                                )}
+                                {(inv.status === 'CREATED' || inv.status === 'PENDING_APPROVAL') && (
+                                  <span className="badge badge-warning" style={{ whiteSpace: 'nowrap' }}>
+                                    <Clock size={11} style={{ marginRight: 3 }} /> {inv.status === 'PENDING_APPROVAL' ? 'Pending Approval' : 'Unpaid'}
+                                  </span>
+                                )}
+                                {inv.status === 'REFUNDED' && (
+                                  <div>
+                                    <span className="badge badge-info" style={{ background: '#ede9fe', color: '#6d28d9', borderColor: '#c4b5fd', whiteSpace: 'nowrap' }}>
+                                      <RotateCcw size={11} style={{ marginRight: 3 }} /> Refund Issued
+                                    </span>
+                                    {inv.refund_amount && (
+                                      <div style={{ fontSize: '0.72rem', color: '#6d28d9', fontWeight: 700, marginTop: 2, whiteSpace: 'nowrap' }}>
+                                        {formatCurrency(inv.refund_amount)} refunded
+                                      </div>
+                                    )}
+                                    {inv.refund_reason && (
+                                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={inv.refund_reason}>
+                                        "{inv.refund_reason}"
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {inv.status === 'FAILED' && (
+                                  <span className="badge badge-danger" style={{ whiteSpace: 'nowrap' }}>Rejected</span>
+                                )}
+                              </td>
+                              <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                                {(inv.paid_at || inv.created_at || '').slice(0, 10)}
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => setSelectedSubInvoice(inv)}
+                                  >
+                                    <FileText size={13} /> {inv.status === 'REFUNDED' ? 'Credit Note' : 'Invoice'}
+                                  </button>
+                                  {(inv.status === 'CREATED' || inv.status === 'REFUNDED') && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary btn-sm"
+                                      onClick={() => setModal('PAY_SUBSCRIPTION_UPI')}
+                                    >
+                                      Pay Now
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
 
@@ -3452,6 +3891,13 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                                 </td>
                                 <td>
                                   <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary btn-sm"
+                                      onClick={() => handleNotificationRedirect(n)}
+                                    >
+                                      <ExternalLink size={13} /> {getNotificationActionLabel(n)}
+                                    </button>
                                     <button
                                       type="button"
                                       className="btn btn-secondary btn-sm"
@@ -4437,44 +4883,20 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => setModal('NONE')}>✕</button>
             </div>
 
-            <div style={{ marginTop: '1rem', background: 'var(--bg-subtle)', padding: '1rem', borderRadius: 8, border: '1px solid var(--border)' }}>
-              <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Amount Payable (incl. GST)</div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--brand)' }}>
-                {formatCurrency(dashData?.subscriptionSummary?.totalAmountDue || currentSociety.total_amount_due || 6488.82)}
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                Plan: {dashData?.subscriptionSummary?.planName || currentSociety.plan_name || 'Standard Plan'}
-              </div>
-            </div>
-
-            <div style={{ marginTop: '1rem', display: 'grid', gap: '0.75rem' }}>
-              <div style={{ padding: '0.85rem', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-surface)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <div>
-                    <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Super Admin Platform UPI ID</span>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'monospace', color: 'var(--primary)', marginTop: 2 }}>
-                      {dashData?.subscriptionSummary?.platformUpiId || 'societyos@icici'}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      Payee: {dashData?.subscriptionSummary?.platformUpiPayeeName || 'SocietyOS Platform'}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => {
-                      navigator.clipboard.writeText(dashData?.subscriptionSummary?.platformUpiId || 'societyos@icici');
-                      notify('Platform UPI ID copied to clipboard!');
-                    }}
-                  >
-                    Copy UPI ID
-                  </button>
-                </div>
-              </div>
+            <div style={{ marginTop: '1rem', display: 'grid', gap: '0.85rem' }}>
+              {/* Dynamic NPCI Standard UPI QR Card */}
+              <UpiQrCard
+                upiId={dashData?.subscriptionSummary?.platformUpiId || 'taxprofessionals97-1@okaxis'}
+                payeeName={dashData?.subscriptionSummary?.platformUpiPayeeName || 'SocietyOS Platform'}
+                amount={dashData?.subscriptionSummary?.totalAmountDue || currentSociety.total_amount_due || 2499}
+                note={`Society Subscription — ${currentSociety.name || ''}`}
+                invoiceNumber={dashData?.subscriptionSummary?.pendingInvoice?.invoice_number}
+                onCopySuccess={(m) => notify(m)}
+              />
 
               {(dashData?.subscriptionSummary?.platformBankName || dashData?.subscriptionSummary?.platformBankAccountNumber) && (
                 <div style={{ padding: '0.85rem', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-surface)', fontSize: '0.82rem', display: 'grid', gap: 2 }}>
-                  <strong style={{ fontSize: '0.85rem' }}>Platform Bank Account Details (NEFT / IMPS / RTGS):</strong>
+                  <strong style={{ fontSize: '0.85rem' }}>Direct Bank Transfer Details (NEFT / IMPS / RTGS):</strong>
                   <div>Bank Name: {dashData?.subscriptionSummary?.platformBankName}</div>
                   <div>Account Number: <code>{dashData?.subscriptionSummary?.platformBankAccountNumber}</code></div>
                   <div>IFSC Code: <code>{dashData?.subscriptionSummary?.platformBankIfsc}</code></div>
@@ -4490,13 +4912,14 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                     method: 'POST',
                     body: {
                       utr: subUpiForm.utr.trim(),
+                      receiptUrl: subUpiForm.receiptUrl,
                       notes: subUpiForm.notes.trim(),
                       amount: dashData?.subscriptionSummary?.totalAmountDue,
                       planId: dashData?.subscriptionSummary?.planId,
                     },
                   });
                   notify(res.message);
-                  setSubUpiForm({ utr: '', notes: '' });
+                  setSubUpiForm({ utr: '', notes: '', receiptUrl: '' });
                   setModal('NONE');
                   refreshCurrentTab();
                 } catch (err: any) {
@@ -4516,19 +4939,63 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   onChange={(e) => setSubUpiForm({ ...subUpiForm, utr: e.target.value })}
                 />
               </div>
+
+              {/* Upload Proof / Receipt Attachment */}
+              <div className="form-group">
+                <label>Upload Payment Receipt / Screenshot Proof (Recommended)</label>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <label
+                    className="btn btn-secondary btn-sm"
+                    style={{ cursor: isUploadingSubReceipt ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                  >
+                    <Upload size={14} />
+                    <span>{isUploadingSubReceipt ? 'Uploading Proof...' : 'Choose Receipt Image / PDF'}</span>
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      style={{ display: 'none' }}
+                      disabled={isUploadingSubReceipt}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setIsUploadingSubReceipt(true);
+                        try {
+                          const url = await uploadFileAsBase64(file);
+                          setSubUpiForm((prev) => ({ ...prev, receiptUrl: url }));
+                          notify('Payment receipt uploaded successfully!');
+                        } catch (err: any) {
+                          notify(err.message || 'Failed to upload receipt', 'error');
+                        } finally {
+                          setIsUploadingSubReceipt(false);
+                        }
+                      }}
+                    />
+                  </label>
+                  {subUpiForm.receiptUrl && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--success)', fontWeight: 600 }}>
+                      <CheckCircle2 size={15} />
+                      <span>Receipt attached</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div className="form-group">
                 <label>Payer Details / Remarks (Optional)</label>
                 <input
                   type="text"
                   className="input"
-                  placeholder="e.g., Paid by President from society account"
+                  placeholder="e.g., Paid by President from society bank account"
                   value={subUpiForm.notes}
                   onChange={(e) => setSubUpiForm({ ...subUpiForm, notes: e.target.value })}
                 />
               </div>
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Submit UPI Payment Reference</button>
+                <button type="submit" className="btn btn-primary" disabled={isUploadingSubReceipt}>
+                  Submit Payment Details & UTR
+                </button>
               </div>
             </form>
           </div>
@@ -4567,10 +5034,10 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.83rem', margin: '0.75rem 0', cursor: 'pointer' }}>
               <input
                 type="checkbox"
-                checked={wipeFlatsAndMembers}
-                onChange={(e) => setWipeFlatsAndMembers(e.target.checked)}
+                checked={wipeMembersAndFlats}
+                onChange={(e) => setWipeMembersAndFlats(e.target.checked)}
               />
-              <span style={{ color: wipeFlatsAndMembers ? '#ef4444' : 'inherit' }}>
+              <span style={{ color: wipeMembersAndFlats ? '#ef4444' : 'inherit' }}>
                 Also remove test flats & enrolled members (leaves society completely empty)
               </span>
             </label>
@@ -4674,6 +5141,303 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: VIEW SUBSCRIPTION INVOICE / CREDIT NOTE */}
+      {selectedSubInvoice && (
+        <SubscriptionInvoiceModal
+          invoice={{
+            ...selectedSubInvoice,
+            society_name: currentSociety.name,
+            society_address: currentSociety.address,
+          }}
+          onClose={() => setSelectedSubInvoice(null)}
+        />
+      )}
+
+      {/* MODAL: INTERACTIVE COMPLAINT REPLY & RESOLUTION DIALOG */}
+      {replyModalComplaint && (
+        <div className="modal-backdrop" onClick={() => setReplyModalComplaint(null)}>
+          <div
+            className="modal"
+            style={{ maxWidth: 620, width: '100%', maxHeight: '90vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.75rem' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.15rem' }}>
+                  Reply to Complaint #{replyModalComplaint.complaint_number}
+                </h3>
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                  Flat {replyModalComplaint.flat_number} ({replyModalComplaint.member_name}) • Category: <strong>{replyModalComplaint.category}</strong>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setReplyModalComplaint(null)}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Complaint Summary and Attached Photos */}
+            <div style={{ padding: '0.85rem', background: 'var(--bg-subtle)', borderRadius: 8, marginBottom: '1rem', border: '1px solid var(--border)' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem' }}>{replyModalComplaint.title}</div>
+              <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+                {replyModalComplaint.description}
+              </div>
+
+              {Array.isArray(replyModalComplaint.attachments) && replyModalComplaint.attachments.length > 0 && (
+                <div style={{ marginTop: '0.75rem', paddingTop: '0.65rem', borderTop: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.45rem' }}>
+                    <ImageIcon size={13} color="var(--primary)" /> Attached Photos & Documents ({replyModalComplaint.attachments.length}):
+                  </span>
+                  <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    {replyModalComplaint.attachments.map((att: any, idx: number) => {
+                      const fileUrl = att.file_url || att.url;
+                      if (!fileUrl) return null;
+                      const isImg = !att.file_type || att.file_type.includes('image') || /\.(png|jpe?g|webp|gif|svg)($|\?)/i.test(fileUrl);
+                      return isImg ? (
+                        <div
+                          key={att.id || idx}
+                          onClick={() => setViewingPhotoUrl(fileUrl)}
+                          style={{
+                            position: 'relative',
+                            cursor: 'pointer',
+                            border: '1.5px solid var(--border)',
+                            borderRadius: 6,
+                            overflow: 'hidden',
+                            width: 68,
+                            height: 68,
+                            backgroundColor: '#0f172a',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                          }}
+                          title="Click to zoom image"
+                        >
+                          <img
+                            src={fileUrl}
+                            alt={att.file_name || `Attachment ${idx + 1}`}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          />
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              background: 'rgba(0,0,0,0.3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              opacity: 0,
+                              transition: 'opacity 0.15s',
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                            onMouseLeave={(e) => (e.currentTarget.style.opacity = '0')}
+                          >
+                            <Eye size={18} color="#fff" />
+                          </div>
+                        </div>
+                      ) : (
+                        <a
+                          key={att.id || idx}
+                          href={fileUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.74rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                        >
+                          <FileText size={13} /> {att.file_name || 'Document'}
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Conversation History */}
+            {Array.isArray(replyModalComplaint.comments) && replyModalComplaint.comments.length > 0 && (
+              <div style={{ marginBottom: '1rem', display: 'grid', gap: '0.45rem' }}>
+                <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                  Conversation Thread ({replyModalComplaint.comments.length})
+                </div>
+                <div style={{ maxHeight: 180, overflowY: 'auto', display: 'grid', gap: '0.45rem', paddingRight: '0.25rem' }}>
+                  {replyModalComplaint.comments.map((cm: any) => (
+                    <div
+                      key={cm.id}
+                      style={{
+                        padding: '0.55rem 0.75rem',
+                        borderRadius: 6,
+                        background: cm.is_internal ? 'rgba(245, 158, 11, 0.1)' : 'var(--bg-surface)',
+                        borderLeft: cm.is_internal ? '3px solid #f59e0b' : '3px solid var(--primary)',
+                        border: '1px solid var(--border)',
+                        borderLeftWidth: '3px',
+                        fontSize: '0.82rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                        <strong style={{ fontSize: '0.76rem', color: cm.is_internal ? '#d97706' : 'var(--primary)' }}>
+                          {cm.author_name} {cm.is_internal ? '(Internal Staff Note)' : ''}
+                        </strong>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                          {(cm.created_at || '').slice(0, 16).replace('T', ' ')}
+                        </span>
+                      </div>
+                      <div style={{ color: 'var(--text-primary)', lineHeight: 1.45 }}>{cm.comment_text}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Reply Form */}
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!replyCommentText.trim()) return;
+                try {
+                  setIsSubmittingReply(true);
+                  await apiFetch(`/api/society/complaints/${replyModalComplaint.id}`, {
+                    method: 'PUT',
+                    body: {
+                      commentText: replyCommentText.trim(),
+                      isInternal: replyIsInternal,
+                    },
+                  });
+                  notify('Response submitted successfully.');
+                  setReplyModalComplaint(null);
+                  setReplyCommentText('');
+                  refreshCurrentTab();
+                } catch (err: any) {
+                  notify(err.message, 'error');
+                } finally {
+                  setIsSubmittingReply(false);
+                }
+              }}
+              style={{ display: 'grid', gap: '0.85rem' }}
+            >
+              <div className="form-group">
+                <label style={{ fontSize: '0.82rem', fontWeight: 600 }}>Response Message *</label>
+                <textarea
+                  className="textarea"
+                  rows={3}
+                  required
+                  placeholder="Enter message for resident (e.g. Our plumbing team will visit today between 3 PM and 5 PM)..."
+                  value={replyCommentText}
+                  onChange={(e) => setReplyCommentText(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  id="adminReplyInternal"
+                  checked={replyIsInternal}
+                  onChange={(e) => setReplyIsInternal(e.target.checked)}
+                />
+                <label htmlFor="adminReplyInternal" style={{ fontSize: '0.82rem', cursor: 'pointer', margin: 0 }}>
+                  Internal note only (Staff & Admin visible only; resident will NOT see this note)
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setReplyModalComplaint(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-sm"
+                  disabled={isSubmittingReply || !replyCommentText.trim()}
+                >
+                  {isSubmittingReply ? 'Posting...' : 'Post Response'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PHOTO LIGHTBOX VIEWER */}
+      {viewingPhotoUrl && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.88)',
+            zIndex: 99999,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.25rem',
+            backdropFilter: 'blur(5px)',
+          }}
+          onClick={() => setViewingPhotoUrl(null)}
+        >
+          <div
+            style={{
+              position: 'relative',
+              maxWidth: '92vw',
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '0.65rem',
+                color: '#fff',
+              }}
+            >
+              <span style={{ fontSize: '0.88rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <ImageIcon size={15} /> Attachment Image Preview
+              </span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <a
+                  href={viewingPhotoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-secondary btn-sm"
+                  style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.15)' }}
+                >
+                  <ExternalLink size={13} /> Full Size
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.15)' }}
+                  onClick={() => setViewingPhotoUrl(null)}
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+            <img
+              src={viewingPhotoUrl}
+              alt="Attachment Preview"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '82vh',
+                borderRadius: 8,
+                objectFit: 'contain',
+                boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+              }}
+            />
           </div>
         </div>
       )}

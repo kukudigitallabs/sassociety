@@ -244,7 +244,15 @@ if ($cleanPath === '/api/public/plans' && $method === 'GET') {
     if ($pdo) {
         try {
             $plans = $pdo->query("SELECT * FROM subscription_plans WHERE is_active = 1 ORDER BY price_amount ASC")->fetchAll() ?: [];
-            $platform = $pdo->query("SELECT platform_name, support_email, support_phone, default_trial_enabled, default_trial_days, default_grace_period_days, auto_approve_paid_societies, auto_approve_trial_societies, razorpay_key_id, razorpay_sandbox_mode FROM platform_settings LIMIT 1")->fetch() ?: null;
+            $platform = $pdo->query("SELECT * FROM platform_settings LIMIT 1")->fetch() ?: null;
+            if ($platform) {
+                unset(
+                    $platform['razorpay_key_secret_encrypted'],
+                    $platform['razorpay_webhook_secret_encrypted'],
+                    $platform['paytm_merchant_key_encrypted'],
+                    $platform['custom_gateway_secret_encrypted']
+                );
+            }
         } catch (\Throwable $e) {}
     }
     http_response_code(200);
@@ -515,6 +523,7 @@ if ($cleanPath === '/api/super-admin/plans') {
         $billingPeriod = trim($reqData['billing_period'] ?? $reqData['billingPeriod'] ?? 'MONTHLY');
         $durationDays = (int)($reqData['duration_days'] ?? $reqData['durationDays'] ?? 30);
         $taxPercent = (float)($reqData['tax_percent'] ?? $reqData['taxPercent'] ?? 18);
+        $taxName = trim($reqData['tax_name'] ?? $reqData['taxName'] ?? 'GST');
         $maxHouseholds = (int)($reqData['max_households'] ?? $reqData['maxHouseholds'] ?? 500);
         $description = trim($reqData['description'] ?? '');
         $trialEnabled = !empty($reqData['trial_enabled']) || !empty($reqData['trialEnabled']) ? 1 : 0;
@@ -528,24 +537,28 @@ if ($cleanPath === '/api/super-admin/plans') {
             exit;
         }
 
+        try {
+            $pdo->exec("ALTER TABLE subscription_plans ADD COLUMN tax_name VARCHAR(64) NOT NULL DEFAULT 'GST'");
+        } catch (\Throwable $t) {}
+
         $id = 'plan-' . strtolower(preg_replace('/[^a-z0-9]+/i', '-', $code));
         $now = date('Y-m-d H:i:s');
 
         $stmt = $pdo->prepare("
             INSERT INTO subscription_plans (
-                id, code, name, description, billing_period, duration_days, price_amount, tax_percent,
+                id, code, name, description, billing_period, duration_days, price_amount, tax_percent, tax_name,
                 max_households, trial_enabled, trial_days, grace_period_days, auto_approve_after_payment, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON DUPLICATE KEY UPDATE 
                 name = VALUES(name), description = VALUES(description), price_amount = VALUES(price_amount),
                 billing_period = VALUES(billing_period), duration_days = VALUES(duration_days),
-                tax_percent = VALUES(tax_percent), max_households = VALUES(max_households),
+                tax_percent = VALUES(tax_percent), tax_name = VALUES(tax_name), max_households = VALUES(max_households),
                 trial_enabled = VALUES(trial_enabled), trial_days = VALUES(trial_days),
                 grace_period_days = VALUES(grace_period_days), auto_approve_after_payment = VALUES(auto_approve_after_payment),
                 updated_at = VALUES(updated_at)
         ");
         $stmt->execute([
-            $id, $code, $name, $description, $billingPeriod, $durationDays, $priceAmount, $taxPercent,
+            $id, $code, $name, $description, $billingPeriod, $durationDays, $priceAmount, $taxPercent, $taxName,
             $maxHouseholds, $trialEnabled, $trialDays, $gracePeriodDays, $autoApprove, $now, $now
         ]);
 
@@ -607,22 +620,91 @@ if ($cleanPath === '/api/super-admin/settings') {
     if ($method === 'PUT' || $method === 'POST') {
         if ($pdo) {
             try {
-                $platformName = $reqData['platformName'] ?? null;
-                $supportEmail = $reqData['supportEmail'] ?? null;
-                $supportPhone = $reqData['supportPhone'] ?? null;
-                $defaultTrialEnabled = isset($reqData['defaultTrialEnabled']) ? ($reqData['defaultTrialEnabled'] ? 1 : 0) : null;
-                $defaultTrialDays = isset($reqData['defaultTrialDays']) ? (int)$reqData['defaultTrialDays'] : null;
-                $defaultGracePeriodDays = isset($reqData['defaultGracePeriodDays']) ? (int)$reqData['defaultGracePeriodDays'] : null;
-                $autoApprovePaid = isset($reqData['autoApprovePaidSocieties']) ? ($reqData['autoApprovePaidSocieties'] ? 1 : 0) : null;
-                $autoApproveTrial = isset($reqData['autoApproveTrialSocieties']) ? ($reqData['autoApproveTrialSocieties'] ? 1 : 0) : null;
-                $razorpayKeyId = $reqData['razorpayKeyId'] ?? null;
-                $upiId = $reqData['upiId'] ?? null;
-                $upiPayeeName = $reqData['upiPayeeName'] ?? null;
-                $bankName = $reqData['bankName'] ?? null;
-                $bankAccountNumber = $reqData['bankAccountNumber'] ?? null;
-                $bankIfsc = $reqData['bankIfsc'] ?? null;
-                $razorpaySandboxMode = isset($reqData['razorpaySandboxMode']) ? ($reqData['razorpaySandboxMode'] ? 1 : 0) : null;
-                $welcomeEmailTemplate = $reqData['welcomeEmailTemplate'] ?? null;
+                // Ensure columns exist in MySQL if not present
+                $safeAlter = [
+                    "ALTER TABLE platform_settings ADD COLUMN upi_id VARCHAR(64) NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN upi_payee_name TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN bank_name TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN bank_account_number TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN bank_ifsc TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN subscription_tax_enabled INT NOT NULL DEFAULT 1",
+                    "ALTER TABLE platform_settings ADD COLUMN subscription_tax_name VARCHAR(64) NOT NULL DEFAULT 'GST'",
+                    "ALTER TABLE platform_settings ADD COLUMN subscription_tax_percent DECIMAL(5,2) NOT NULL DEFAULT 18.00",
+                    "ALTER TABLE platform_settings ADD COLUMN razorpay_enabled INT NOT NULL DEFAULT 1",
+                    "ALTER TABLE platform_settings ADD COLUMN upi_payment_enabled INT NOT NULL DEFAULT 1",
+                    "ALTER TABLE platform_settings ADD COLUMN paytm_enabled INT NOT NULL DEFAULT 0",
+                    "ALTER TABLE platform_settings ADD COLUMN custom_gateway_enabled INT NOT NULL DEFAULT 0",
+                    "ALTER TABLE platform_settings ADD COLUMN meta_title TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN meta_description TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN meta_keywords TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN meta_author TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN meta_og_image TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN favicon_url TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN google_adsense_enabled INT NOT NULL DEFAULT 0",
+                    "ALTER TABLE platform_settings ADD COLUMN google_adsense_client_id VARCHAR(128) NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN google_ad_slot_header VARCHAR(128) NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN google_ad_slot_sidebar VARCHAR(128) NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN google_ad_slot_footer VARCHAR(128) NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN google_analytics_id VARCHAR(64) NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN custom_header_scripts LONGTEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN logo_url TEXT NULL",
+                    "ALTER TABLE platform_settings ADD COLUMN dark_logo_url TEXT NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN receipt_url TEXT NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN notes TEXT NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN rejection_reason TEXT NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN refund_amount DECIMAL(10,2) NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN refund_reference VARCHAR(128) NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN refunded_at DATETIME NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN refund_notes TEXT NULL",
+                    "ALTER TABLE subscription_payments ADD COLUMN refund_gateway VARCHAR(64) NULL"
+                ];
+                foreach ($safeAlter as $sql) {
+                    try { $pdo->exec($sql); } catch (\Throwable $t) {}
+                }
+
+                $platformName = $reqData['platformName'] ?? $reqData['platform_name'] ?? null;
+                $supportEmail = $reqData['supportEmail'] ?? $reqData['support_email'] ?? null;
+                $supportPhone = $reqData['supportPhone'] ?? $reqData['support_phone'] ?? null;
+                $defaultTrialEnabled = isset($reqData['defaultTrialEnabled']) ? ($reqData['defaultTrialEnabled'] ? 1 : 0) : (isset($reqData['default_trial_enabled']) ? ($reqData['default_trial_enabled'] ? 1 : 0) : null);
+                $defaultTrialDays = isset($reqData['defaultTrialDays']) ? (int)$reqData['defaultTrialDays'] : (isset($reqData['default_trial_days']) ? (int)$reqData['default_trial_days'] : null);
+                $defaultGracePeriodDays = isset($reqData['defaultGracePeriodDays']) ? (int)$reqData['defaultGracePeriodDays'] : (isset($reqData['default_grace_period_days']) ? (int)$reqData['default_grace_period_days'] : null);
+                $autoApprovePaid = isset($reqData['autoApprovePaidSocieties']) ? ($reqData['autoApprovePaidSocieties'] ? 1 : 0) : (isset($reqData['auto_approve_paid_societies']) ? ($reqData['auto_approve_paid_societies'] ? 1 : 0) : null);
+                $autoApproveTrial = isset($reqData['autoApproveTrialSocieties']) ? ($reqData['autoApproveTrialSocieties'] ? 1 : 0) : (isset($reqData['auto_approve_trial_societies']) ? ($reqData['auto_approve_trial_societies'] ? 1 : 0) : null);
+                $razorpayKeyId = $reqData['razorpayKeyId'] ?? $reqData['razorpay_key_id'] ?? null;
+                $upiId = $reqData['upiId'] ?? $reqData['upi_id'] ?? null;
+                $upiPayeeName = $reqData['upiPayeeName'] ?? $reqData['upi_payee_name'] ?? null;
+                $bankName = $reqData['bankName'] ?? $reqData['bank_name'] ?? null;
+                $bankAccountNumber = $reqData['bankAccountNumber'] ?? $reqData['bank_account_number'] ?? null;
+                $bankIfsc = $reqData['bankIfsc'] ?? $reqData['bank_ifsc'] ?? null;
+                $razorpaySandboxMode = isset($reqData['razorpaySandboxMode']) ? ($reqData['razorpaySandboxMode'] ? 1 : 0) : (isset($reqData['razorpay_sandbox_mode']) ? ($reqData['razorpay_sandbox_mode'] ? 1 : 0) : null);
+                $welcomeEmailTemplate = $reqData['welcomeEmailTemplate'] ?? $reqData['welcome_email_template'] ?? null;
+
+                $subscriptionTaxEnabled = isset($reqData['subscriptionTaxEnabled']) ? ($reqData['subscriptionTaxEnabled'] ? 1 : 0) : (isset($reqData['subscription_tax_enabled']) ? ($reqData['subscription_tax_enabled'] ? 1 : 0) : null);
+                $subscriptionTaxName = $reqData['subscriptionTaxName'] ?? $reqData['subscription_tax_name'] ?? null;
+                $subscriptionTaxPercent = isset($reqData['subscriptionTaxPercent']) ? (float)$reqData['subscriptionTaxPercent'] : (isset($reqData['subscription_tax_percent']) ? (float)$reqData['subscription_tax_percent'] : null);
+
+                $razorpayEnabled = isset($reqData['razorpayEnabled']) ? ($reqData['razorpayEnabled'] ? 1 : 0) : (isset($reqData['razorpay_enabled']) ? ($reqData['razorpay_enabled'] ? 1 : 0) : null);
+                $upiPaymentEnabled = isset($reqData['upiPaymentEnabled']) ? ($reqData['upiPaymentEnabled'] ? 1 : 0) : (isset($reqData['upi_payment_enabled']) ? ($reqData['upi_payment_enabled'] ? 1 : 0) : null);
+                $paytmEnabled = isset($reqData['paytmEnabled']) ? ($reqData['paytmEnabled'] ? 1 : 0) : (isset($reqData['paytm_enabled']) ? ($reqData['paytm_enabled'] ? 1 : 0) : null);
+                $customGatewayEnabled = isset($reqData['customGatewayEnabled']) ? ($reqData['customGatewayEnabled'] ? 1 : 0) : (isset($reqData['custom_gateway_enabled']) ? ($reqData['custom_gateway_enabled'] ? 1 : 0) : null);
+
+                $metaTitle = $reqData['metaTitle'] ?? $reqData['meta_title'] ?? null;
+                $metaDescription = $reqData['metaDescription'] ?? $reqData['meta_description'] ?? null;
+                $metaKeywords = $reqData['metaKeywords'] ?? $reqData['meta_keywords'] ?? null;
+                $metaAuthor = $reqData['metaAuthor'] ?? $reqData['meta_author'] ?? null;
+                $metaOgImage = $reqData['metaOgImage'] ?? $reqData['meta_og_image'] ?? null;
+                $faviconUrl = $reqData['faviconUrl'] ?? $reqData['favicon_url'] ?? null;
+
+                $googleAdsenseEnabled = isset($reqData['googleAdsenseEnabled']) ? ($reqData['googleAdsenseEnabled'] ? 1 : 0) : (isset($reqData['google_adsense_enabled']) ? ($reqData['google_adsense_enabled'] ? 1 : 0) : null);
+                $googleAdsenseClientId = $reqData['googleAdsenseClientId'] ?? $reqData['google_adsense_client_id'] ?? null;
+                $googleAdSlotHeader = $reqData['googleAdSlotHeader'] ?? $reqData['google_ad_slot_header'] ?? null;
+                $googleAdSlotSidebar = $reqData['googleAdSlotSidebar'] ?? $reqData['google_ad_slot_sidebar'] ?? null;
+                $googleAdSlotFooter = $reqData['googleAdSlotFooter'] ?? $reqData['google_ad_slot_footer'] ?? null;
+                $googleAnalyticsId = $reqData['googleAnalyticsId'] ?? $reqData['google_analytics_id'] ?? null;
+                $customHeaderScripts = $reqData['customHeaderScripts'] ?? $reqData['custom_header_scripts'] ?? null;
+
+                $logoUrl = $reqData['logoUrl'] ?? $reqData['logo_url'] ?? null;
+                $darkLogoUrl = $reqData['darkLogoUrl'] ?? $reqData['dark_logo_url'] ?? null;
 
                 $existing = $pdo->query("SELECT id FROM platform_settings LIMIT 1")->fetch();
                 if (!$existing) {
@@ -632,10 +714,15 @@ if ($cleanPath === '/api/super-admin/settings') {
                             default_trial_days, default_grace_period_days, auto_approve_paid_societies,
                             auto_approve_trial_societies, razorpay_key_id, razorpay_sandbox_mode,
                             welcome_email_template, invoice_email_template, overdue_email_template,
-                            upi_id, upi_payee_name, bank_name, bank_account_number, bank_ifsc, updated_at
+                            upi_id, upi_payee_name, bank_name, bank_account_number, bank_ifsc,
+                            subscription_tax_enabled, subscription_tax_name, subscription_tax_percent,
+                            razorpay_enabled, upi_payment_enabled, paytm_enabled, custom_gateway_enabled,
+                            meta_title, meta_description, meta_keywords, meta_author, meta_og_image, favicon_url,
+                            google_adsense_enabled, google_adsense_client_id, google_ad_slot_header, google_ad_slot_sidebar,
+                            google_ad_slot_footer, google_analytics_id, custom_header_scripts, logo_url, dark_logo_url, updated_at
                         ) VALUES (
                             'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Invoice Template', 'Overdue Template',
-                            ?, ?, ?, ?, ?, NOW()
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()
                         )
                     ");
                     $ins->execute([
@@ -654,7 +741,29 @@ if ($cleanPath === '/api/super-admin/settings') {
                         $upiPayeeName ?: '',
                         $bankName ?: '',
                         $bankAccountNumber ?: '',
-                        $bankIfsc ?: ''
+                        $bankIfsc ?: '',
+                        $subscriptionTaxEnabled ?? 1,
+                        $subscriptionTaxName ?: 'GST',
+                        $subscriptionTaxPercent ?? 18.0,
+                        $razorpayEnabled ?? 1,
+                        $upiPaymentEnabled ?? 1,
+                        $paytmEnabled ?? 0,
+                        $customGatewayEnabled ?? 0,
+                        $metaTitle ?: '',
+                        $metaDescription ?: '',
+                        $metaKeywords ?: '',
+                        $metaAuthor ?: '',
+                        $metaOgImage ?: '',
+                        $faviconUrl ?: '',
+                        $googleAdsenseEnabled ?? 0,
+                        $googleAdsenseClientId ?: '',
+                        $googleAdSlotHeader ?: '',
+                        $googleAdSlotSidebar ?: '',
+                        $googleAdSlotFooter ?: '',
+                        $googleAnalyticsId ?: '',
+                        $customHeaderScripts ?: '',
+                        $logoUrl ?: '',
+                        $darkLogoUrl ?: ''
                     ]);
                 } else {
                     $rowId = $existing['id'];
@@ -676,6 +785,28 @@ if ($cleanPath === '/api/super-admin/settings') {
                             bank_ifsc = COALESCE(?, bank_ifsc),
                             razorpay_sandbox_mode = COALESCE(?, razorpay_sandbox_mode),
                             welcome_email_template = COALESCE(?, welcome_email_template),
+                            subscription_tax_enabled = COALESCE(?, subscription_tax_enabled),
+                            subscription_tax_name = COALESCE(?, subscription_tax_name),
+                            subscription_tax_percent = COALESCE(?, subscription_tax_percent),
+                            razorpay_enabled = COALESCE(?, razorpay_enabled),
+                            upi_payment_enabled = COALESCE(?, upi_payment_enabled),
+                            paytm_enabled = COALESCE(?, paytm_enabled),
+                            custom_gateway_enabled = COALESCE(?, custom_gateway_enabled),
+                            meta_title = COALESCE(?, meta_title),
+                            meta_description = COALESCE(?, meta_description),
+                            meta_keywords = COALESCE(?, meta_keywords),
+                            meta_author = COALESCE(?, meta_author),
+                            meta_og_image = COALESCE(?, meta_og_image),
+                            favicon_url = COALESCE(?, favicon_url),
+                            google_adsense_enabled = COALESCE(?, google_adsense_enabled),
+                            google_adsense_client_id = COALESCE(?, google_adsense_client_id),
+                            google_ad_slot_header = COALESCE(?, google_ad_slot_header),
+                            google_ad_slot_sidebar = COALESCE(?, google_ad_slot_sidebar),
+                            google_ad_slot_footer = COALESCE(?, google_ad_slot_footer),
+                            google_analytics_id = COALESCE(?, google_analytics_id),
+                            custom_header_scripts = COALESCE(?, custom_header_scripts),
+                            logo_url = COALESCE(?, logo_url),
+                            dark_logo_url = COALESCE(?, dark_logo_url),
                             updated_at = NOW()
                         WHERE id = ?
                     ");
@@ -696,19 +827,41 @@ if ($cleanPath === '/api/super-admin/settings') {
                         $bankIfsc,
                         $razorpaySandboxMode,
                         $welcomeEmailTemplate,
+                        $subscriptionTaxEnabled,
+                        $subscriptionTaxName,
+                        $subscriptionTaxPercent,
+                        $razorpayEnabled,
+                        $upiPaymentEnabled,
+                        $paytmEnabled,
+                        $customGatewayEnabled,
+                        $metaTitle,
+                        $metaDescription,
+                        $metaKeywords,
+                        $metaAuthor,
+                        $metaOgImage,
+                        $faviconUrl,
+                        $googleAdsenseEnabled,
+                        $googleAdsenseClientId,
+                        $googleAdSlotHeader,
+                        $googleAdSlotSidebar,
+                        $googleAdSlotFooter,
+                        $googleAnalyticsId,
+                        $customHeaderScripts,
+                        $logoUrl,
+                        $darkLogoUrl,
                         $rowId
                     ]);
                 }
             } catch (\Throwable $e) {}
         }
         http_response_code(200);
-        echo json_encode(['message' => 'Platform settings and payment gateway credentials updated successfully.']);
+        echo json_encode(['message' => 'Platform settings, taxes, payment gateways, and customization updated successfully.']);
         exit;
     }
 }
 
-// 3.8c SUPER ADMIN SUBSCRIPTION PAYMENTS (APPROVE & REFUND)
-if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/approve$#', $cleanPath, $m) && $method === 'POST') {
+// 3.8c SUPER ADMIN SUBSCRIPTION PAYMENTS (APPROVE, AUTO-VERIFY, REJECT & REFUND)
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/(approve|mark-paid)$#', $cleanPath, $m) && $method === 'POST') {
     $subPayId = $m[1];
     if ($pdo) {
         try {
@@ -727,7 +880,14 @@ if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/approve$#', $cl
 
                 $pdo->prepare("
                     UPDATE subscription_payments
-                    SET status = 'PAID', paid_at = ?, verified_by_user_id = ?
+                    SET status = 'PAID',
+                        paid_at = ?,
+                        verified_by_user_id = ?,
+                        refund_reason = NULL,
+                        refund_amount = NULL,
+                        refund_reference = NULL,
+                        refunded_at = NULL,
+                        refund_notes = NULL
                     WHERE id = ?
                 ")->execute([$now, $auth['userId'] ?? 'super_admin', $subPayId]);
 
@@ -750,22 +910,205 @@ if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/approve$#', $cl
     exit;
 }
 
-if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/refund$#', $cleanPath, $m) && $method === 'POST') {
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/auto-verify$#', $cleanPath, $m) && $method === 'POST') {
     $subPayId = $m[1];
-    $reason = trim($reqData['reason'] ?? 'Refund approved by Super Admin');
     if ($pdo) {
         try {
             $sp = $pdo->prepare("SELECT * FROM subscription_payments WHERE id = ? LIMIT 1");
             $sp->execute([$subPayId]);
             $pay = $sp->fetch();
             if ($pay) {
-                $pdo->prepare("UPDATE subscription_payments SET status = 'REFUNDED', refund_reason = ? WHERE id = ?")->execute([$reason, $subPayId]);
-                $pdo->prepare("UPDATE societies SET payment_status = 'REFUNDED', updated_at = NOW() WHERE id = ?")->execute([$pay['society_id']]);
+                $socId = $pay['society_id'];
+                $planId = $pay['plan_id'];
+                $now = date('Y-m-d H:i:s');
+                
+                $plan = $pdo->prepare("SELECT duration_days FROM subscription_plans WHERE id = ? LIMIT 1");
+                $plan->execute([$planId]);
+                $days = (int)($plan->fetchColumn() ?: 30);
+                $endsAt = date('Y-m-d H:i:s', time() + ($days * 86400));
+
+                $pdo->prepare("
+                    UPDATE subscription_payments
+                    SET status = 'PAID',
+                        paid_at = ?,
+                        verified_by_user_id = ?,
+                        refund_reason = NULL,
+                        refund_amount = NULL,
+                        refund_reference = NULL,
+                        refunded_at = NULL,
+                        refund_notes = NULL
+                    WHERE id = ?
+                ")->execute([$now, $auth['userId'] ?? 'super_admin', $subPayId]);
+
+                $pdo->prepare("
+                    UPDATE societies
+                    SET subscription_plan_id = ?,
+                        subscription_status = 'ACTIVE',
+                        approval_status = 'APPROVED',
+                        payment_status = 'PAID',
+                        subscription_starts_at = ?,
+                        subscription_ends_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                ")->execute([$planId, $now, $endsAt, $now, $socId]);
             }
         } catch (\Throwable $e) {}
     }
     http_response_code(200);
-    echo json_encode(['message' => 'Subscription payment marked as refunded.']);
+    echo json_encode(['message' => 'Subscription payment auto-verified. Society is now Active & Approved.']);
+    exit;
+}
+
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/reject$#', $cleanPath, $m) && $method === 'POST') {
+    $subPayId = $m[1];
+    $reason = trim($reqData['reason'] ?? 'Payment reference could not be verified by Super Admin');
+    if ($pdo) {
+        try {
+            $pdo->prepare("UPDATE subscription_payments SET status = 'FAILED', rejection_reason = ? WHERE id = ?")->execute([$reason, $subPayId]);
+            $sp = $pdo->prepare("SELECT society_id FROM subscription_payments WHERE id = ? LIMIT 1");
+            $sp->execute([$subPayId]);
+            $socId = $sp->fetchColumn();
+            if ($socId) {
+                $pdo->prepare("UPDATE societies SET payment_status = 'FAILED', updated_at = NOW() WHERE id = ?")->execute([$socId]);
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Subscription payment marked as rejected.']);
+    exit;
+}
+
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/mark-unpaid$#', $cleanPath, $m) && $method === 'POST') {
+    $subPayId = $m[1];
+    $notes = trim($reqData['notes'] ?? 'Payment marked as unpaid by Super Admin');
+    if ($pdo) {
+        try {
+            $pdo->prepare("
+                UPDATE subscription_payments
+                SET status = 'CREATED',
+                    paid_at = NULL,
+                    notes = ?,
+                    refund_reason = NULL,
+                    refund_amount = NULL,
+                    refund_reference = NULL,
+                    refunded_at = NULL,
+                    refund_notes = NULL
+                WHERE id = ?
+            ")->execute([$notes, $subPayId]);
+
+            $sp = $pdo->prepare("SELECT society_id FROM subscription_payments WHERE id = ? LIMIT 1");
+            $sp->execute([$subPayId]);
+            $socId = $sp->fetchColumn();
+            if ($socId) {
+                $pdo->prepare("
+                    UPDATE societies
+                    SET payment_status = 'PENDING',
+                        subscription_status = 'PENDING_PAYMENT',
+                        approval_status = 'PENDING',
+                        updated_at = NOW()
+                    WHERE id = ?
+                ")->execute([$socId]);
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Subscription payment marked as Unpaid. Society status set to Pending Payment.']);
+    exit;
+}
+
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/refund$#', $cleanPath, $m) && $method === 'POST') {
+    $subPayId = $m[1];
+    $reason = trim($reqData['reason'] ?? 'Refund approved by Super Admin');
+    $refundAmt = isset($reqData['refundAmount']) ? floatval($reqData['refundAmount']) : null;
+    $ref = trim($reqData['refundReference'] ?? '');
+    $gateway = trim($reqData['refundGateway'] ?? 'UPI');
+    $notes = trim($reqData['refundNotes'] ?? '');
+
+    if ($pdo) {
+        try {
+            $sp = $pdo->prepare("SELECT * FROM subscription_payments WHERE id = ? LIMIT 1");
+            $sp->execute([$subPayId]);
+            $pay = $sp->fetch();
+            if ($pay) {
+                $finalAmt = ($refundAmt !== null && $refundAmt > 0) ? $refundAmt : floatval($pay['total_amount']);
+                $now = date('Y-m-d H:i:s');
+                $pdo->prepare("
+                    UPDATE subscription_payments
+                    SET status = 'REFUNDED',
+                        refund_reason = ?,
+                        refund_amount = ?,
+                        refund_reference = ?,
+                        refund_gateway = ?,
+                        refund_notes = ?,
+                        refunded_at = ?
+                    WHERE id = ?
+                ")->execute([$reason, $finalAmt, $ref ?: null, $gateway, $notes ?: null, $now, $subPayId]);
+
+                $pdo->prepare("
+                    UPDATE societies
+                    SET payment_status = 'REFUNDED',
+                        subscription_status = 'EXPIRED',
+                        approval_status = 'PENDING',
+                        updated_at = NOW()
+                    WHERE id = ?
+                ")->execute([$pay['society_id']]);
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Subscription payment marked as refunded. Society status set to suspended/unpaid.']);
+    exit;
+}
+
+if (preg_match('#^/api/super-admin/subscription-payments/([^/]+)/update-refund$#', $cleanPath, $m) && $method === 'POST') {
+    $subPayId = $m[1];
+    $reason = trim($reqData['reason'] ?? '');
+    $refundAmt = isset($reqData['refundAmount']) ? floatval($reqData['refundAmount']) : null;
+    $ref = trim($reqData['refundReference'] ?? '');
+    $gateway = trim($reqData['refundGateway'] ?? '');
+    $notes = trim($reqData['refundNotes'] ?? '');
+
+    if ($pdo) {
+        try {
+            $sp = $pdo->prepare("SELECT * FROM subscription_payments WHERE id = ? LIMIT 1");
+            $sp->execute([$subPayId]);
+            $pay = $sp->fetch();
+            if ($pay) {
+                $finalAmt = ($refundAmt !== null && $refundAmt > 0) ? $refundAmt : floatval($pay['refund_amount'] ?: $pay['total_amount']);
+                $pdo->prepare("
+                    UPDATE subscription_payments
+                    SET refund_reason = COALESCE(?, refund_reason),
+                        refund_amount = ?,
+                        refund_reference = COALESCE(?, refund_reference),
+                        refund_gateway = COALESCE(?, refund_gateway),
+                        refund_notes = COALESCE(?, refund_notes)
+                    WHERE id = ?
+                ")->execute([$reason ?: null, $finalAmt, $ref ?: null, $gateway ?: null, $notes ?: null, $subPayId]);
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Refund issue details updated successfully.']);
+    exit;
+}
+
+if ($cleanPath === '/api/society/subscription/invoices' && $method === 'GET') {
+    $invoices = [];
+    if ($pdo && !empty($auth['societyId'])) {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT sp.*, p.name as plan_name, p.code as plan_code, p.billing_period as plan_billing_period
+                FROM subscription_payments sp
+                LEFT JOIN subscription_plans p ON p.id = sp.plan_id
+                WHERE sp.society_id = ?
+                ORDER BY sp.created_at DESC
+            ");
+            $stmt->execute([$auth['societyId']]);
+            $invoices = $stmt->fetchAll() ?: [];
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['invoices' => $invoices]);
     exit;
 }
 
@@ -792,6 +1135,9 @@ if ($cleanPath === '/api/society/subscription/submit-upi' && $method === 'POST')
             $plan->execute([$targetPlanId]);
             $planRow = $plan->fetch();
 
+            $receiptUrl = $reqData['receiptUrl'] ?? $reqData['receipt_url'] ?? null;
+            $notes = $reqData['notes'] ?? null;
+
             $basePrice = $planRow ? (float)$planRow['price_amount'] : 5499.0;
             $taxPct = $planRow ? (float)$planRow['tax_percent'] : 18.0;
             $taxAmt = round(($basePrice * $taxPct) / 100, 2);
@@ -803,8 +1149,8 @@ if ($cleanPath === '/api/society/subscription/submit-upi' && $method === 'POST')
             $ins = $pdo->prepare("
                 INSERT INTO subscription_payments (
                     id, society_id, plan_id, invoice_number, amount, tax_amount, total_amount,
-                    payment_gateway, gateway_order_id, gateway_payment_id, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPI', ?, ?, 'PENDING_APPROVAL', NOW())
+                    payment_gateway, gateway_order_id, gateway_payment_id, receipt_url, notes, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPI', ?, ?, ?, ?, 'PENDING_APPROVAL', NOW())
             ");
             $ins->execute([
                 $subPayId,
@@ -815,16 +1161,18 @@ if ($cleanPath === '/api/society/subscription/submit-upi' && $method === 'POST')
                 $taxAmt,
                 $totalAmt,
                 'UPI_DIRECT_TRANSFER',
-                $utr
+                $utr,
+                $receiptUrl,
+                $notes
             ]);
 
-            $pdo->prepare("UPDATE societies SET payment_status = 'PENDING_APPROVAL', updated_at = NOW() WHERE id = ?")->execute([$activeSocId]);
+            $pdo->prepare("UPDATE societies SET payment_status = 'PENDING', updated_at = NOW() WHERE id = ?")->execute([$activeSocId]);
 
             http_response_code(201);
             echo json_encode([
                 'id' => $subPayId,
                 'invoiceNumber' => $invNo,
-                'message' => 'UPI payment reference submitted successfully. Super Admin will verify and activate your subscription.'
+                'message' => 'UPI payment reference and receipt proof submitted successfully. Super Admin will verify and activate your subscription.'
             ]);
             exit;
         } catch (\Throwable $e) {
@@ -1462,8 +1810,31 @@ if ($cleanPath === '/api/society/dashboard' && $method === 'GET') {
             $resolvedComplaints = (int)$pdo->query("SELECT COUNT(*) FROM complaints WHERE society_id = " . $pdo->quote($activeSocId) . " AND status = 'RESOLVED'")->fetchColumn();
             $onDutyStaffCount = (int)$pdo->query("SELECT COUNT(*) FROM staff WHERE society_id = " . $pdo->quote($activeSocId) . " AND (duty_status = 'ON_DUTY' OR is_on_duty = 1)")->fetchColumn();
 
+            $subInvoicesStmt = $pdo->prepare("
+                SELECT sp.*, p.name as plan_name, p.code as plan_code, p.billing_period as plan_billing_period
+                FROM subscription_payments sp
+                LEFT JOIN subscription_plans p ON p.id = sp.plan_id
+                WHERE sp.society_id = ?
+                ORDER BY sp.created_at DESC
+            ");
+            $subInvoicesStmt->execute([$activeSocId]);
+            $subscriptionInvoices = $subInvoicesStmt->fetchAll() ?: [];
+            $latestSubPayment = $subscriptionInvoices[0] ?? null;
+            $isRefunded = ($latestSubPayment && ($latestSubPayment['status'] ?? '') === 'REFUNDED');
+
             $recentPayments = $pdo->query("SELECT p.*, h.flat_number, sm.full_name as member_name FROM payments p LEFT JOIN households h ON h.id = p.household_id LEFT JOIN society_members sm ON sm.id = p.member_id WHERE p.society_id = " . $pdo->quote($activeSocId) . " ORDER BY p.created_at DESC LIMIT 10")->fetchAll() ?: [];
             $recentComplaints = $pdo->query("SELECT c.*, sm.full_name as member_name FROM complaints c LEFT JOIN society_members sm ON sm.id = c.member_id WHERE c.society_id = " . $pdo->quote($activeSocId) . " ORDER BY c.created_at DESC LIMIT 10")->fetchAll() ?: [];
+            $recentAttachments = $pdo->query("SELECT * FROM complaint_attachments WHERE society_id = " . $pdo->quote($activeSocId))->fetchAll() ?: [];
+            $recentComments = $pdo->query("SELECT * FROM complaint_comments WHERE society_id = " . $pdo->quote($activeSocId) . " ORDER BY created_at ASC")->fetchAll() ?: [];
+            $attByComp = [];
+            foreach ($recentAttachments as $at) { $attByComp[$at['complaint_id']][] = $at; }
+            $cmByComp = [];
+            foreach ($recentComments as $cm) { $cmByComp[$cm['complaint_id']][] = $cm; }
+            foreach ($recentComplaints as &$rc) {
+                $rc['attachments'] = $attByComp[$rc['id']] ?? [];
+                $rc['comments'] = $cmByComp[$rc['id']] ?? [];
+            }
+            unset($rc);
             $recentEnrolments = $pdo->query("SELECT sm.*, h.flat_number, h.block_name FROM society_members sm LEFT JOIN households h ON h.id = sm.household_id WHERE sm.society_id = " . $pdo->quote($activeSocId) . " ORDER BY sm.created_at DESC LIMIT 6")->fetchAll() ?: [];
         } catch (\Throwable $e) {}
     }
@@ -1476,12 +1847,27 @@ if ($cleanPath === '/api/society/dashboard' && $method === 'GET') {
             'subscriptionStatus' => $subStatus,
             'daysRemaining' => $daysRemaining,
             'totalAmountDue' => $totalAmountDue,
+            'isRefunded' => $isRefunded,
+            'refundDetails' => $isRefunded ? [
+                'reason' => $latestSubPayment['refund_reason'] ?? '',
+                'amount' => !empty($latestSubPayment['refund_amount']) ? (float)$latestSubPayment['refund_amount'] : (float)($latestSubPayment['total_amount'] ?? 0),
+                'reference' => $latestSubPayment['refund_reference'] ?? '',
+                'date' => $latestSubPayment['refunded_at'] ?? ($latestSubPayment['created_at'] ?? ''),
+                'gateway' => $latestSubPayment['refund_gateway'] ?? '',
+                'notes' => $latestSubPayment['refund_notes'] ?? '',
+            ] : null,
             'platformUpiId' => $platformSettings['upi_id'] ?? '',
             'platformUpiPayeeName' => $platformSettings['upi_payee_name'] ?? 'SocietyOS Platform',
             'platformBankName' => $platformSettings['bank_name'] ?? '',
             'platformBankAccountNumber' => $platformSettings['bank_account_number'] ?? '',
             'platformBankIfsc' => $platformSettings['bank_ifsc'] ?? '',
+            'razorpayEnabled' => !isset($platformSettings['razorpay_enabled']) || (int)$platformSettings['razorpay_enabled'] === 1,
+            'upiPaymentEnabled' => !isset($platformSettings['upi_payment_enabled']) || (int)$platformSettings['upi_payment_enabled'] === 1,
+            'subscriptionTaxEnabled' => !isset($platformSettings['subscription_tax_enabled']) || (int)$platformSettings['subscription_tax_enabled'] === 1,
+            'subscriptionTaxName' => $platformSettings['subscription_tax_name'] ?? 'GST',
+            'subscriptionTaxPercent' => isset($platformSettings['subscription_tax_percent']) ? (float)$platformSettings['subscription_tax_percent'] : 18.0,
         ],
+        'subscriptionInvoices' => $subscriptionInvoices ?? [],
         'superAdminNotifications' => [],
         'allSocietyNotifications' => [],
         'recentPayments' => $recentPayments,
@@ -2796,6 +3182,17 @@ if ($cleanPath === '/api/member/dashboard' && $method === 'GET') {
                 $settings = $pdo->query("SELECT * FROM society_settings WHERE society_id = " . $pdo->quote($socId))->fetch() ?: null;
                 $bills = $pdo->query("SELECT * FROM member_bills WHERE society_id = " . $pdo->quote($socId) . " ORDER BY created_at DESC LIMIT 12")->fetchAll() ?: [];
                 $complaints = $pdo->query("SELECT * FROM complaints WHERE society_id = " . $pdo->quote($socId) . " AND (member_id = " . $pdo->quote($member['id']) . " OR household_id = " . $pdo->quote($member['household_id']) . ") ORDER BY created_at DESC")->fetchAll() ?: [];
+                $memberAtts = $pdo->query("SELECT * FROM complaint_attachments WHERE society_id = " . $pdo->quote($socId))->fetchAll() ?: [];
+                $memberComms = $pdo->query("SELECT * FROM complaint_comments WHERE society_id = " . $pdo->quote($socId) . " AND is_internal = 0 ORDER BY created_at ASC")->fetchAll() ?: [];
+                $mAttByComp = [];
+                foreach ($memberAtts as $at) { $mAttByComp[$at['complaint_id']][] = $at; }
+                $mCmByComp = [];
+                foreach ($memberComms as $cm) { $mCmByComp[$cm['complaint_id']][] = $cm; }
+                foreach ($complaints as &$mc) {
+                    $mc['attachments'] = $mAttByComp[$mc['id']] ?? [];
+                    $mc['comments'] = $mCmByComp[$mc['id']] ?? [];
+                }
+                unset($mc);
                 $suggestions = $pdo->query("SELECT * FROM suggestions WHERE society_id = " . $pdo->quote($socId) . " AND (member_id = " . $pdo->quote($member['id']) . " OR household_id = " . $pdo->quote($member['household_id']) . ") ORDER BY created_at DESC")->fetchAll() ?: [];
                 $announcements = $pdo->query("SELECT * FROM announcements WHERE society_id = " . $pdo->quote($socId) . " ORDER BY created_at DESC LIMIT 10")->fetchAll() ?: [];
                 $events = $pdo->query("SELECT * FROM society_events WHERE society_id = " . $pdo->quote($socId) . " ORDER BY start_time ASC LIMIT 10")->fetchAll() ?: [];
@@ -2829,17 +3226,21 @@ if ($cleanPath === '/api/notifications/mark-read' && $method === 'POST') {
 
 // 3.21 FILE UPLOAD
 if ($cleanPath === '/api/upload' && $method === 'POST') {
-    $fileName = basename($reqData['fileName'] ?? ('upload_' . time() . '.png'));
+    $rawName = basename($reqData['fileName'] ?? ('upload_' . time() . '.png'));
+    $ext = pathinfo($rawName, PATHINFO_EXTENSION) ?: 'png';
+    $base = pathinfo($rawName, PATHINFO_FILENAME);
+    $cleanBase = preg_replace('/[^a-zA-Z0-9_-]/', '', substr($base, 0, 40)) ?: 'upload';
+    $safeName = $cleanBase . '_' . time() . '_' . substr(bin2hex(random_bytes(4)), 0, 6) . '.' . $ext;
     $uploadDir = __DIR__ . '/../data/uploads';
     if (!is_dir($uploadDir)) @mkdir($uploadDir, 0755, true);
-    $filePath = $uploadDir . '/' . $fileName;
+    $filePath = $uploadDir . '/' . $safeName;
 
     if (!empty($reqData['base64Data'])) {
         $b64 = preg_replace('/^data:[^;]+;base64,/', '', $reqData['base64Data']);
         @file_put_contents($filePath, base64_decode($b64));
     }
     http_response_code(200);
-    echo json_encode(['url' => '/uploads/' . $fileName]);
+    echo json_encode(['url' => '/uploads/' . $safeName, 'fileName' => $safeName]);
     exit;
 }
 

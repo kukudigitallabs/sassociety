@@ -21009,6 +21009,37 @@ function initDatabase() {
     "ALTER TABLE platform_settings ADD COLUMN bank_name TEXT NULL",
     "ALTER TABLE platform_settings ADD COLUMN bank_account_number TEXT NULL",
     "ALTER TABLE platform_settings ADD COLUMN bank_ifsc TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN subscription_tax_enabled INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE platform_settings ADD COLUMN subscription_tax_name TEXT NOT NULL DEFAULT 'GST'",
+    "ALTER TABLE platform_settings ADD COLUMN subscription_tax_percent REAL NOT NULL DEFAULT 18.0",
+    "ALTER TABLE subscription_plans ADD COLUMN tax_name TEXT NOT NULL DEFAULT 'GST'",
+    "ALTER TABLE platform_settings ADD COLUMN razorpay_enabled INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE platform_settings ADD COLUMN upi_payment_enabled INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE platform_settings ADD COLUMN paytm_enabled INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE platform_settings ADD COLUMN custom_gateway_enabled INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE platform_settings ADD COLUMN meta_title TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN meta_description TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN meta_keywords TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN meta_author TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN meta_og_image TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN favicon_url TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN google_adsense_enabled INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE platform_settings ADD COLUMN google_adsense_client_id TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN google_ad_slot_header TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN google_ad_slot_sidebar TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN google_ad_slot_footer TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN google_analytics_id TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN custom_header_scripts TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN logo_url TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN dark_logo_url TEXT NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN receipt_url TEXT NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN notes TEXT NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN rejection_reason TEXT NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN refund_amount REAL NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN refund_reference TEXT NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN refunded_at TEXT NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN refund_notes TEXT NULL",
+    "ALTER TABLE subscription_payments ADD COLUMN refund_gateway TEXT NULL",
     "ALTER TABLE households ADD COLUMN opening_balance REAL NOT NULL DEFAULT 0",
     "ALTER TABLE households ADD COLUMN opening_balance_notes TEXT NULL",
     "ALTER TABLE households ADD COLUMN opening_balance_date TEXT NULL"
@@ -22167,17 +22198,19 @@ async function handleApiRequest(ctx) {
       if (!fileName || !base64Data) {
         return sendJson(res, 400, { error: "fileName and base64Data are required." });
       }
-      const allowedMime = ["image/png", "image/jpeg", "image/jpg", "image/webp", "application/pdf"];
+      const allowedMime = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/svg+xml", "image/gif", "application/pdf"];
       const cleanMime = String(mimeType || "image/png").toLowerCase();
       if (!allowedMime.includes(cleanMime)) {
-        return sendJson(res, 400, { error: "Unsupported file type. Allowed: PNG, JPG, WEBP, PDF." });
+        return sendJson(res, 400, { error: "Unsupported file type. Allowed: PNG, JPG, WEBP, SVG, GIF, PDF." });
       }
       const rawBase64 = String(base64Data).replace(/^data:[^;]+;base64,/, "");
       const buffer = Buffer.from(rawBase64, "base64");
-      if (buffer.byteLength > 5 * 1024 * 1024) {
-        return sendJson(res, 400, { error: "File exceeds maximum allowed size of 5 MB." });
+      if (buffer.byteLength > 10 * 1024 * 1024) {
+        return sendJson(res, 400, { error: "File exceeds maximum allowed size of 10 MB." });
       }
-      const ext = path4.extname(String(fileName)).replace(/[^a-zA-Z0-9.]/g, "") || ".png";
+      const ext = path4.extname(String(fileName)).replace(/[^a-zA-Z0-9.]/g, "") || (cleanMime === "image/svg+xml" ? ".svg" : ".png");
+      const cleanBase = path4.basename(String(fileName), ext).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40) || "upload";
+      const safeName = `${cleanBase}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
       const isServerless2 = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
       const uploadDir = isServerless2 ? path4.join("/tmp", "uploads") : path4.join(process.cwd(), "data", "uploads");
       fs4.mkdirSync(uploadDir, { recursive: true });
@@ -22492,12 +22525,13 @@ async function handleApiRequest(ctx) {
     }
     if (pathname === "/api/public/plans" && method === "GET") {
       const plans = db.prepare("SELECT * FROM subscription_plans WHERE is_active = 1 ORDER BY price_amount ASC").all();
-      const platform = db.prepare(`
-        SELECT platform_name, support_email, support_phone, default_trial_enabled,
-               default_trial_days, default_grace_period_days, auto_approve_paid_societies,
-               auto_approve_trial_societies, razorpay_key_id, razorpay_sandbox_mode
-        FROM platform_settings LIMIT 1
-      `).get();
+      const platform = db.prepare("SELECT * FROM platform_settings LIMIT 1").get();
+      if (platform) {
+        delete platform.razorpay_key_secret_encrypted;
+        delete platform.razorpay_webhook_secret_encrypted;
+        delete platform.paytm_merchant_key_encrypted;
+        delete platform.custom_gateway_secret_encrypted;
+      }
       return sendJson(res, 200, { plans, platform });
     }
     if (pathname === "/api/public/register-society" && method === "POST") {
@@ -23536,6 +23570,7 @@ async function handleApiRequest(ctx) {
           durationDays = 30,
           priceAmount,
           taxPercent = 18,
+          taxName = "GST",
           maxHouseholds = 500,
           trialEnabled = true,
           trialDays = 14,
@@ -23548,9 +23583,9 @@ async function handleApiRequest(ctx) {
         const id = uuid();
         db.prepare(`
           INSERT INTO subscription_plans (
-            id, code, name, description, billing_period, duration_days, price_amount, tax_percent,
+            id, code, name, description, billing_period, duration_days, price_amount, tax_percent, tax_name,
             max_households, trial_enabled, trial_days, grace_period_days, auto_approve_after_payment, is_active
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         `).run(
           id,
           String(code).toUpperCase().trim(),
@@ -23560,6 +23595,7 @@ async function handleApiRequest(ctx) {
           Number(durationDays),
           Number(priceAmount),
           Number(taxPercent),
+          String(taxName || "GST"),
           Number(maxHouseholds),
           trialEnabled ? 1 : 0,
           Number(trialDays),
@@ -23618,34 +23654,54 @@ async function handleApiRequest(ctx) {
         return sendJson(res, 200, { message: "Subscription plan updated." });
       }
       if (pathname === "/api/super-admin/settings" && method === "PUT") {
-        const {
-          platformName,
-          supportEmail,
-          supportPhone,
-          defaultTrialEnabled,
-          defaultTrialDays,
-          defaultGracePeriodDays,
-          autoApprovePaidSocieties,
-          autoApproveTrialSocieties,
-          reminderDaysBeforeExpiry,
-          razorpayKeyId,
-          razorpayKeySecret,
-          razorpayWebhookSecret,
-          paytmMerchantId,
-          paytmMerchantKey,
-          customGatewayName,
-          customGatewayApiKey,
-          customGatewaySecret,
-          upiId,
-          upiPayeeName,
-          bankName,
-          bankAccountNumber,
-          bankIfsc,
-          razorpaySandboxMode,
-          welcomeEmailTemplate,
-          invoiceEmailTemplate,
-          overdueEmailTemplate
-        } = body;
+        const platformName = body.platformName ?? body.platform_name;
+        const supportEmail = body.supportEmail ?? body.support_email;
+        const supportPhone = body.supportPhone ?? body.support_phone;
+        const defaultTrialEnabled = body.defaultTrialEnabled ?? body.default_trial_enabled;
+        const defaultTrialDays = body.defaultTrialDays ?? body.default_trial_days;
+        const defaultGracePeriodDays = body.defaultGracePeriodDays ?? body.default_grace_period_days;
+        const autoApprovePaidSocieties = body.autoApprovePaidSocieties ?? body.auto_approve_paid_societies;
+        const autoApproveTrialSocieties = body.autoApproveTrialSocieties ?? body.auto_approve_trial_societies;
+        const reminderDaysBeforeExpiry = body.reminderDaysBeforeExpiry ?? body.reminder_days_before_expiry;
+        const razorpayKeyId = body.razorpayKeyId ?? body.razorpay_key_id;
+        const razorpayKeySecret = body.razorpayKeySecret ?? body.razorpay_key_secret;
+        const razorpayWebhookSecret = body.razorpayWebhookSecret ?? body.razorpay_webhook_secret;
+        const paytmMerchantId = body.paytmMerchantId ?? body.paytm_merchant_id;
+        const paytmMerchantKey = body.paytmMerchantKey ?? body.paytm_merchant_key;
+        const customGatewayName = body.customGatewayName ?? body.custom_gateway_name;
+        const customGatewayApiKey = body.customGatewayApiKey ?? body.custom_gateway_api_key;
+        const customGatewaySecret = body.customGatewaySecret ?? body.custom_gateway_secret;
+        const upiId = body.upiId ?? body.upi_id;
+        const upiPayeeName = body.upiPayeeName ?? body.upi_payee_name;
+        const bankName = body.bankName ?? body.bank_name;
+        const bankAccountNumber = body.bankAccountNumber ?? body.bank_account_number;
+        const bankIfsc = body.bankIfsc ?? body.bank_ifsc;
+        const razorpaySandboxMode = body.razorpaySandboxMode ?? body.razorpay_sandbox_mode;
+        const welcomeEmailTemplate = body.welcomeEmailTemplate ?? body.welcome_email_template;
+        const invoiceEmailTemplate = body.invoiceEmailTemplate ?? body.invoice_email_template;
+        const overdueEmailTemplate = body.overdueEmailTemplate ?? body.overdue_email_template;
+        const subscriptionTaxEnabled = body.subscriptionTaxEnabled ?? body.subscription_tax_enabled;
+        const subscriptionTaxName = body.subscriptionTaxName ?? body.subscription_tax_name;
+        const subscriptionTaxPercent = body.subscriptionTaxPercent ?? body.subscription_tax_percent;
+        const razorpayEnabled = body.razorpayEnabled ?? body.razorpay_enabled;
+        const upiPaymentEnabled = body.upiPaymentEnabled ?? body.upi_payment_enabled;
+        const paytmEnabled = body.paytmEnabled ?? body.paytm_enabled;
+        const customGatewayEnabled = body.customGatewayEnabled ?? body.custom_gateway_enabled;
+        const metaTitle = body.metaTitle ?? body.meta_title;
+        const metaDescription = body.metaDescription ?? body.meta_description;
+        const metaKeywords = body.metaKeywords ?? body.meta_keywords;
+        const metaAuthor = body.metaAuthor ?? body.meta_author;
+        const metaOgImage = body.metaOgImage ?? body.meta_og_image;
+        const faviconUrl = body.faviconUrl ?? body.favicon_url;
+        const googleAdsenseEnabled = body.googleAdsenseEnabled ?? body.google_adsense_enabled;
+        const googleAdsenseClientId = body.googleAdsenseClientId ?? body.google_adsense_client_id;
+        const googleAdSlotHeader = body.googleAdSlotHeader ?? body.google_ad_slot_header;
+        const googleAdSlotSidebar = body.googleAdSlotSidebar ?? body.google_ad_slot_sidebar;
+        const googleAdSlotFooter = body.googleAdSlotFooter ?? body.google_ad_slot_footer;
+        const googleAnalyticsId = body.googleAnalyticsId ?? body.google_analytics_id;
+        const customHeaderScripts = body.customHeaderScripts ?? body.custom_header_scripts;
+        const logoUrl = body.logoUrl ?? body.logo_url;
+        const darkLogoUrl = body.darkLogoUrl ?? body.dark_logo_url;
         db.prepare(`
           UPDATE platform_settings
           SET platform_name = COALESCE(?, platform_name),
@@ -23674,35 +23730,79 @@ async function handleApiRequest(ctx) {
               welcome_email_template = COALESCE(?, welcome_email_template),
               invoice_email_template = COALESCE(?, invoice_email_template),
               overdue_email_template = COALESCE(?, overdue_email_template),
+              subscription_tax_enabled = COALESCE(?, subscription_tax_enabled),
+              subscription_tax_name = COALESCE(?, subscription_tax_name),
+              subscription_tax_percent = COALESCE(?, subscription_tax_percent),
+              razorpay_enabled = COALESCE(?, razorpay_enabled),
+              upi_payment_enabled = COALESCE(?, upi_payment_enabled),
+              paytm_enabled = COALESCE(?, paytm_enabled),
+              custom_gateway_enabled = COALESCE(?, custom_gateway_enabled),
+              meta_title = COALESCE(?, meta_title),
+              meta_description = COALESCE(?, meta_description),
+              meta_keywords = COALESCE(?, meta_keywords),
+              meta_author = COALESCE(?, meta_author),
+              meta_og_image = COALESCE(?, meta_og_image),
+              favicon_url = COALESCE(?, favicon_url),
+              google_adsense_enabled = COALESCE(?, google_adsense_enabled),
+              google_adsense_client_id = COALESCE(?, google_adsense_client_id),
+              google_ad_slot_header = COALESCE(?, google_ad_slot_header),
+              google_ad_slot_sidebar = COALESCE(?, google_ad_slot_sidebar),
+              google_ad_slot_footer = COALESCE(?, google_ad_slot_footer),
+              google_analytics_id = COALESCE(?, google_analytics_id),
+              custom_header_scripts = COALESCE(?, custom_header_scripts),
+              logo_url = COALESCE(?, logo_url),
+              dark_logo_url = COALESCE(?, dark_logo_url),
               updated_at = datetime('now')
           WHERE id = 'default'
         `).run(
-          platformName ?? null,
-          supportEmail ?? null,
-          supportPhone ?? null,
+          platformName !== void 0 ? platformName : null,
+          supportEmail !== void 0 ? supportEmail : null,
+          supportPhone !== void 0 ? supportPhone : null,
           defaultTrialEnabled !== void 0 ? defaultTrialEnabled ? 1 : 0 : null,
           defaultTrialDays !== void 0 ? Number(defaultTrialDays) : null,
           defaultGracePeriodDays !== void 0 ? Number(defaultGracePeriodDays) : null,
           autoApprovePaidSocieties !== void 0 ? autoApprovePaidSocieties ? 1 : 0 : null,
           autoApproveTrialSocieties !== void 0 ? autoApproveTrialSocieties ? 1 : 0 : null,
           reminderDaysBeforeExpiry !== void 0 ? Number(reminderDaysBeforeExpiry) : null,
-          razorpayKeyId ?? null,
+          razorpayKeyId !== void 0 ? razorpayKeyId : null,
           razorpayKeySecret ? `enc_${razorpayKeySecret}` : null,
           razorpayWebhookSecret ? `enc_${razorpayWebhookSecret}` : null,
-          paytmMerchantId ?? null,
+          paytmMerchantId !== void 0 ? paytmMerchantId : null,
           paytmMerchantKey ? `enc_${paytmMerchantKey}` : null,
-          customGatewayName ?? null,
-          customGatewayApiKey ?? null,
+          customGatewayName !== void 0 ? customGatewayName : null,
+          customGatewayApiKey !== void 0 ? customGatewayApiKey : null,
           customGatewaySecret ? `enc_${customGatewaySecret}` : null,
-          upiId ?? null,
-          upiPayeeName ?? null,
-          bankName ?? null,
-          bankAccountNumber ?? null,
-          bankIfsc ?? null,
+          upiId !== void 0 ? upiId : null,
+          upiPayeeName !== void 0 ? upiPayeeName : null,
+          bankName !== void 0 ? bankName : null,
+          bankAccountNumber !== void 0 ? bankAccountNumber : null,
+          bankIfsc !== void 0 ? bankIfsc : null,
           razorpaySandboxMode !== void 0 ? razorpaySandboxMode ? 1 : 0 : null,
-          welcomeEmailTemplate ?? null,
-          invoiceEmailTemplate ?? null,
-          overdueEmailTemplate ?? null
+          welcomeEmailTemplate !== void 0 ? welcomeEmailTemplate : null,
+          invoiceEmailTemplate !== void 0 ? invoiceEmailTemplate : null,
+          overdueEmailTemplate !== void 0 ? overdueEmailTemplate : null,
+          subscriptionTaxEnabled !== void 0 ? subscriptionTaxEnabled ? 1 : 0 : null,
+          subscriptionTaxName !== void 0 ? subscriptionTaxName : null,
+          subscriptionTaxPercent !== void 0 ? Number(subscriptionTaxPercent) : null,
+          razorpayEnabled !== void 0 ? razorpayEnabled ? 1 : 0 : null,
+          upiPaymentEnabled !== void 0 ? upiPaymentEnabled ? 1 : 0 : null,
+          paytmEnabled !== void 0 ? paytmEnabled ? 1 : 0 : null,
+          customGatewayEnabled !== void 0 ? customGatewayEnabled ? 1 : 0 : null,
+          metaTitle !== void 0 ? metaTitle : null,
+          metaDescription !== void 0 ? metaDescription : null,
+          metaKeywords !== void 0 ? metaKeywords : null,
+          metaAuthor !== void 0 ? metaAuthor : null,
+          metaOgImage !== void 0 ? metaOgImage : null,
+          faviconUrl !== void 0 ? faviconUrl : null,
+          googleAdsenseEnabled !== void 0 ? googleAdsenseEnabled ? 1 : 0 : null,
+          googleAdsenseClientId !== void 0 ? googleAdsenseClientId : null,
+          googleAdSlotHeader !== void 0 ? googleAdSlotHeader : null,
+          googleAdSlotSidebar !== void 0 ? googleAdSlotSidebar : null,
+          googleAdSlotFooter !== void 0 ? googleAdSlotFooter : null,
+          googleAnalyticsId !== void 0 ? googleAnalyticsId : null,
+          customHeaderScripts !== void 0 ? customHeaderScripts : null,
+          logoUrl !== void 0 ? logoUrl : null,
+          darkLogoUrl !== void 0 ? darkLogoUrl : null
         );
         syncToMysqlAfterWrite();
         logAudit({
@@ -23712,9 +23812,9 @@ async function handleApiRequest(ctx) {
           entityType: "PLATFORM_SETTINGS",
           entityId: "default"
         });
-        return sendJson(res, 200, { message: "Platform settings and payment gateway credentials updated." });
+        return sendJson(res, 200, { message: "Platform settings, payment gateways, taxes, and customization updated successfully." });
       }
-      const approveMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/approve$/);
+      const approveMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/(approve|mark-paid)$/);
       if (approveMatch && method === "POST") {
         const subPayId = approveMatch[1];
         const sp = db.prepare("SELECT * FROM subscription_payments WHERE id = ?").get(subPayId);
@@ -23725,7 +23825,69 @@ async function handleApiRequest(ctx) {
         const endsAt = new Date(Date.now() + durationDays * 864e5).toISOString();
         db.prepare(`
           UPDATE subscription_payments
-          SET status = 'PAID', paid_at = datetime('now'), verified_by_user_id = ?
+          SET status = 'PAID',
+              paid_at = datetime('now'),
+              verified_by_user_id = ?,
+              refund_reason = NULL,
+              refund_amount = NULL,
+              refund_reference = NULL,
+              refunded_at = NULL,
+              refund_notes = NULL
+          WHERE id = ?
+        `).run(auth.userId, subPayId);
+        db.prepare(`
+          UPDATE societies
+          SET subscription_plan_id = ?,
+              subscription_status = 'ACTIVE',
+              approval_status = 'APPROVED',
+              payment_status = 'PAID',
+              subscription_starts_at = ?,
+              subscription_ends_at = ?,
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(sp.plan_id, startsAt, endsAt, sp.society_id);
+        sendNotification({
+          userId: null,
+          societyId: sp.society_id,
+          title: `Subscription Payment Confirmed (${sp.invoice_number})`,
+          message: `Subscription payment of \u20B9${sp.total_amount} confirmed! Society is active and approved until ${endsAt.slice(0, 10)}.`,
+          type: "SUBSCRIPTION_PAYMENT_CONFIRMED",
+          linkUrl: "/society-admin?tab=NOTIFICATIONS"
+        });
+        syncToMysqlAfterWrite();
+        logAudit({
+          societyId: sp.society_id,
+          actorUserId: auth.userId,
+          actorRole: "SUPER_ADMIN",
+          action: "SUBSCRIPTION_PAYMENT_APPROVED",
+          entityType: "SUBSCRIPTION_PAYMENT",
+          entityId: subPayId
+        });
+        return sendJson(res, 200, { message: "Subscription payment verified and approved. Society is now Active & Approved." });
+      }
+      const autoVerifyMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/auto-verify$/);
+      if (autoVerifyMatch && method === "POST") {
+        const subPayId = autoVerifyMatch[1];
+        const sp = db.prepare("SELECT * FROM subscription_payments WHERE id = ?").get(subPayId);
+        if (!sp) return sendJson(res, 404, { error: "Subscription payment not found." });
+        const ref = (sp.gateway_payment_id || "").trim();
+        if (ref.length < 6) {
+          return sendJson(res, 400, { error: "Payment reference UTR is too short for automated verification. Please inspect proof and confirm manually." });
+        }
+        const plan = db.prepare("SELECT * FROM subscription_plans WHERE id = ?").get(sp.plan_id);
+        const durationDays = Number(plan?.duration_days || 30);
+        const startsAt = (/* @__PURE__ */ new Date()).toISOString();
+        const endsAt = new Date(Date.now() + durationDays * 864e5).toISOString();
+        db.prepare(`
+          UPDATE subscription_payments
+          SET status = 'PAID',
+              paid_at = datetime('now'),
+              verified_by_user_id = ?,
+              refund_reason = NULL,
+              refund_amount = NULL,
+              refund_reference = NULL,
+              refunded_at = NULL,
+              refund_notes = NULL
           WHERE id = ?
         `).run(auth.userId, subPayId);
         db.prepare(`
@@ -23744,20 +23906,131 @@ async function handleApiRequest(ctx) {
           societyId: sp.society_id,
           actorUserId: auth.userId,
           actorRole: "SUPER_ADMIN",
-          action: "SUBSCRIPTION_PAYMENT_APPROVED",
+          action: "SUBSCRIPTION_PAYMENT_AUTO_VERIFIED",
           entityType: "SUBSCRIPTION_PAYMENT",
           entityId: subPayId
         });
-        return sendJson(res, 200, { message: "Subscription payment verified and approved. Society is now Active & Approved." });
+        return sendJson(res, 200, { message: "Subscription payment automatically verified via UTR algorithm! Society activated." });
+      }
+      const rejectMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/reject$/);
+      if (rejectMatch && method === "POST") {
+        const subPayId = rejectMatch[1];
+        const { reason = "Payment reference could not be verified by Super Admin" } = body;
+        const sp = db.prepare("SELECT * FROM subscription_payments WHERE id = ?").get(subPayId);
+        if (!sp) return sendJson(res, 404, { error: "Subscription payment not found." });
+        db.prepare(`
+          UPDATE subscription_payments
+          SET status = 'FAILED', rejection_reason = ?
+          WHERE id = ?
+        `).run(reason, subPayId);
+        db.prepare("UPDATE societies SET payment_status = 'FAILED', updated_at = datetime('now') WHERE id = ?").run(sp.society_id);
+        sendNotification({
+          userId: null,
+          societyId: sp.society_id,
+          title: `Subscription Payment Rejected (${sp.invoice_number})`,
+          message: `Your payment for invoice ${sp.invoice_number} could not be verified. Reason: ${reason}. Please resubmit valid payment details.`,
+          type: "SUBSCRIPTION_PAYMENT_DUE",
+          linkUrl: "/society-admin?tab=NOTIFICATIONS"
+        });
+        syncToMysqlAfterWrite();
+        logAudit({
+          societyId: sp.society_id,
+          actorUserId: auth.userId,
+          actorRole: "SUPER_ADMIN",
+          action: "SUBSCRIPTION_PAYMENT_REJECTED",
+          entityType: "SUBSCRIPTION_PAYMENT",
+          entityId: subPayId,
+          details: { reason }
+        });
+        return sendJson(res, 200, { message: "Subscription payment marked as rejected." });
+      }
+      const markUnpaidMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/mark-unpaid$/);
+      if (markUnpaidMatch && method === "POST") {
+        const subPayId = markUnpaidMatch[1];
+        const { notes = "Payment marked as unpaid by Super Admin" } = body;
+        const sp = db.prepare("SELECT * FROM subscription_payments WHERE id = ?").get(subPayId);
+        if (!sp) return sendJson(res, 404, { error: "Subscription payment not found." });
+        db.prepare(`
+          UPDATE subscription_payments
+          SET status = 'CREATED',
+              paid_at = NULL,
+              notes = ?,
+              refund_reason = NULL,
+              refund_amount = NULL,
+              refund_reference = NULL,
+              refunded_at = NULL,
+              refund_notes = NULL
+          WHERE id = ?
+        `).run(notes, subPayId);
+        db.prepare(`
+          UPDATE societies
+          SET payment_status = 'PENDING',
+              subscription_status = 'PENDING_PAYMENT',
+              approval_status = 'PENDING',
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(sp.society_id);
+        sendNotification({
+          userId: null,
+          societyId: sp.society_id,
+          title: `Subscription Marked Unpaid (${sp.invoice_number})`,
+          message: `Your subscription invoice ${sp.invoice_number} is currently marked as unpaid. Please complete payment of \u20B9${sp.total_amount} to activate society services.`,
+          type: "SUBSCRIPTION_PAYMENT_DUE",
+          linkUrl: "/society-admin?tab=NOTIFICATIONS"
+        });
+        syncToMysqlAfterWrite();
+        logAudit({
+          societyId: sp.society_id,
+          actorUserId: auth.userId,
+          actorRole: "SUPER_ADMIN",
+          action: "SUBSCRIPTION_PAYMENT_MARKED_UNPAID",
+          entityType: "SUBSCRIPTION_PAYMENT",
+          entityId: subPayId,
+          details: { notes }
+        });
+        return sendJson(res, 200, { message: "Subscription payment marked as Unpaid. Society status set to Pending Payment." });
       }
       const refundMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/refund$/);
       if (refundMatch && method === "POST") {
         const subPayId = refundMatch[1];
-        const { reason = "Refund approved by Super Admin" } = body;
+        const {
+          reason = "Refund approved by Super Admin",
+          refundAmount,
+          refundReference = "",
+          refundGateway = "UPI",
+          refundNotes = ""
+        } = body;
         const sp = db.prepare("SELECT * FROM subscription_payments WHERE id = ?").get(subPayId);
         if (!sp) return sendJson(res, 404, { error: "Subscription payment not found." });
-        db.prepare("UPDATE subscription_payments SET status = 'REFUNDED', refund_reason = ? WHERE id = ?").run(reason, subPayId);
-        db.prepare("UPDATE societies SET payment_status = 'REFUNDED', updated_at = datetime('now') WHERE id = ?").run(sp.society_id);
+        const finalRefundAmt = Number(refundAmount) > 0 ? Number(refundAmount) : Number(sp.total_amount);
+        db.prepare(`
+          UPDATE subscription_payments
+          SET status = 'REFUNDED',
+              refund_reason = ?,
+              refund_amount = ?,
+              refund_reference = ?,
+              refund_gateway = ?,
+              refund_notes = ?,
+              refunded_at = datetime('now')
+          WHERE id = ?
+        `).run(reason, finalRefundAmt, refundReference || null, refundGateway, refundNotes || null, subPayId);
+        db.prepare(`
+          UPDATE societies
+          SET payment_status = 'REFUNDED',
+              subscription_status = 'EXPIRED',
+              approval_status = 'PENDING',
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(sp.society_id);
+        sendNotification({
+          userId: null,
+          societyId: sp.society_id,
+          title: `Subscription Refund Issued (${sp.invoice_number})`,
+          message: `A refund of \u20B9${finalRefundAmt} has been processed for invoice ${sp.invoice_number} (Ref: ${refundReference || "N/A"}). Reason: ${reason}. Your subscription is currently suspended until renewed.`,
+          type: "SUBSCRIPTION_PAYMENT_DUE",
+          linkUrl: "/society-admin?tab=NOTIFICATIONS"
+        });
+        syncToMysqlAfterWrite();
         logAudit({
           societyId: sp.society_id,
           actorUserId: auth.userId,
@@ -23765,9 +24038,44 @@ async function handleApiRequest(ctx) {
           action: "SUBSCRIPTION_PAYMENT_REFUNDED",
           entityType: "SUBSCRIPTION_PAYMENT",
           entityId: subPayId,
-          details: { reason }
+          details: { reason, refundAmount: finalRefundAmt, refundReference, refundGateway }
         });
-        return sendJson(res, 200, { message: "Subscription payment marked as refunded." });
+        return sendJson(res, 200, { message: `Subscription payment marked as refunded (\u20B9${finalRefundAmt} issued). Society status set to suspended/unpaid.` });
+      }
+      const updateRefundMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/update-refund$/);
+      if (updateRefundMatch && method === "POST") {
+        const subPayId = updateRefundMatch[1];
+        const {
+          reason,
+          refundAmount,
+          refundReference,
+          refundGateway,
+          refundNotes
+        } = body;
+        const sp = db.prepare("SELECT * FROM subscription_payments WHERE id = ?").get(subPayId);
+        if (!sp) return sendJson(res, 404, { error: "Subscription payment not found." });
+        const finalRefundAmt = refundAmount !== void 0 ? Number(refundAmount) : sp.refund_amount || sp.total_amount;
+        db.prepare(`
+          UPDATE subscription_payments
+          SET refund_reason = COALESCE(?, refund_reason),
+              refund_amount = ?,
+              refund_reference = COALESCE(?, refund_reference),
+              refund_gateway = COALESCE(?, refund_gateway),
+              refund_notes = COALESCE(?, refund_notes),
+              refunded_at = COALESCE(refunded_at, datetime('now'))
+          WHERE id = ?
+        `).run(reason || null, finalRefundAmt, refundReference || null, refundGateway || null, refundNotes || null, subPayId);
+        syncToMysqlAfterWrite();
+        logAudit({
+          societyId: sp.society_id,
+          actorUserId: auth.userId,
+          actorRole: "SUPER_ADMIN",
+          action: "SUBSCRIPTION_REFUND_UPDATED",
+          entityType: "SUBSCRIPTION_PAYMENT",
+          entityId: subPayId,
+          details: { reason, refundAmount: finalRefundAmt, refundReference }
+        });
+        return sendJson(res, 200, { message: "Refund issue details updated successfully." });
       }
     }
     if (pathname.startsWith("/api/society")) {
@@ -23978,6 +24286,13 @@ async function handleApiRequest(ctx) {
           WHERE c.society_id = ?
           ORDER BY c.created_at DESC LIMIT 6
         `).all(societyId);
+        const complaintAttachments = db.prepare("SELECT * FROM complaint_attachments WHERE society_id = ?").all(societyId);
+        const complaintComments = db.prepare("SELECT * FROM complaint_comments WHERE society_id = ? ORDER BY created_at ASC").all(societyId);
+        const enrichedRecentComplaints = recentComplaints.map((c) => ({
+          ...c,
+          attachments: complaintAttachments.filter((a) => a.complaint_id === c.id),
+          comments: complaintComments.filter((cm) => cm.complaint_id === c.id)
+        }));
         const recentExpenses = db.prepare(`
           SELECT * FROM expenses WHERE society_id = ? ORDER BY expense_date DESC, created_at DESC LIMIT 6
         `).all(societyId);
@@ -24019,6 +24334,15 @@ async function handleApiRequest(ctx) {
           WHERE society_id = ? OR user_id = ?
           ORDER BY created_at DESC LIMIT 100
         `).all(societyId, auth.userId);
+        const subscriptionInvoices = db.prepare(`
+          SELECT sp.*, p.name as plan_name, p.code as plan_code, p.billing_period as plan_billing_period
+          FROM subscription_payments sp
+          LEFT JOIN subscription_plans p ON p.id = sp.plan_id
+          WHERE sp.society_id = ?
+          ORDER BY sp.created_at DESC
+        `).all(societyId);
+        const latestSubPayment = subscriptionInvoices[0] || null;
+        const isRefunded = latestSubPayment?.status === "REFUNDED";
         const platform = db.prepare("SELECT * FROM platform_settings LIMIT 1").get();
         const subscriptionSummary = {
           planId: society?.subscription_plan_id || "plan_growth",
@@ -24036,11 +24360,27 @@ async function handleApiRequest(ctx) {
           expiryDate,
           daysRemaining,
           pendingInvoice: pendingInvoice || null,
+          isRefunded,
+          refundDetails: isRefunded ? {
+            reason: latestSubPayment?.refund_reason,
+            amount: latestSubPayment?.refund_amount || latestSubPayment?.total_amount,
+            reference: latestSubPayment?.refund_reference,
+            date: latestSubPayment?.refunded_at || latestSubPayment?.created_at,
+            gateway: latestSubPayment?.refund_gateway,
+            notes: latestSubPayment?.refund_notes
+          } : null,
           platformUpiId: platform?.upi_id || "",
           platformUpiPayeeName: platform?.upi_payee_name || "SocietyOS Platform",
           platformBankName: platform?.bank_name || "",
           platformBankAccountNumber: platform?.bank_account_number || "",
-          platformBankIfsc: platform?.bank_ifsc || ""
+          platformBankIfsc: platform?.bank_ifsc || "",
+          razorpayEnabled: Boolean(platform?.razorpay_enabled ?? 1),
+          upiPaymentEnabled: Boolean(platform?.upi_payment_enabled ?? 1),
+          paytmEnabled: Boolean(platform?.paytm_enabled ?? 0),
+          customGatewayEnabled: Boolean(platform?.custom_gateway_enabled ?? 0),
+          subscriptionTaxEnabled: Boolean(platform?.subscription_tax_enabled ?? 1),
+          subscriptionTaxName: platform?.subscription_tax_name || "GST",
+          subscriptionTaxPercent: Number(platform?.subscription_tax_percent ?? 18)
         };
         return sendJson(res, 200, {
           society: society ? {
@@ -24050,6 +24390,7 @@ async function handleApiRequest(ctx) {
             days_remaining: daysRemaining
           } : null,
           subscriptionSummary,
+          subscriptionInvoices,
           superAdminNotifications,
           allSocietyNotifications,
           kpis: {
@@ -24075,7 +24416,7 @@ async function handleApiRequest(ctx) {
           },
           recentPayments,
           recentEnrolments,
-          recentComplaints,
+          recentComplaints: enrichedRecentComplaints,
           recentExpenses,
           upcomingEvents
         });
@@ -24088,8 +24429,18 @@ async function handleApiRequest(ctx) {
         `).all(societyId, auth.userId);
         return sendJson(res, 200, { notifications });
       }
+      if (pathname === "/api/society/subscription/invoices" && method === "GET") {
+        const invoices = db.prepare(`
+          SELECT sp.*, p.name as plan_name, p.code as plan_code, p.billing_period as plan_billing_period
+          FROM subscription_payments sp
+          LEFT JOIN subscription_plans p ON p.id = sp.plan_id
+          WHERE sp.society_id = ?
+          ORDER BY sp.created_at DESC
+        `).all(societyId);
+        return sendJson(res, 200, { invoices });
+      }
       if (pathname === "/api/society/subscription/submit-upi" && method === "POST") {
-        const { utr, transactionReference, planId, amount } = body;
+        const { utr, transactionReference, planId, amount, receiptUrl, notes } = body;
         const ref = String(utr || transactionReference || "").trim();
         if (!ref) {
           return sendJson(res, 400, { error: "UPI transaction reference / UTR is required." });
@@ -24097,24 +24448,34 @@ async function handleApiRequest(ctx) {
         const soc = db.prepare("SELECT * FROM societies WHERE id = ?").get(societyId);
         const targetPlanId = planId || soc?.subscription_plan_id || "plan-quarterly-growth";
         const plan = db.prepare("SELECT * FROM subscription_plans WHERE id = ?").get(targetPlanId);
+        const platform = db.prepare("SELECT * FROM platform_settings LIMIT 1").get();
         const basePrice = Number(plan?.price_amount || 5499);
-        const taxPct = Number(plan?.tax_percent || 18);
-        const taxAmt = Number((basePrice * taxPct / 100).toFixed(2));
+        const taxEnabled = Boolean(platform?.subscription_tax_enabled ?? 1);
+        const taxPct = taxEnabled ? Number(plan?.tax_percent ?? platform?.subscription_tax_percent ?? 18) : 0;
+        const taxAmt = taxEnabled ? Number((basePrice * taxPct / 100).toFixed(2)) : 0;
         const totalAmt = Number(amount) > 0 ? Number(amount) : Number((basePrice + taxAmt).toFixed(2));
         const subPayId = uuid();
         const invNo = `SUB-INV-${(/* @__PURE__ */ new Date()).getFullYear()}-${Math.floor(1e4 + Math.random() * 9e4)}`;
         db.prepare(`
           INSERT INTO subscription_payments (
             id, society_id, plan_id, invoice_number, amount, tax_amount, total_amount,
-            payment_gateway, gateway_order_id, gateway_payment_id, status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPI', 'UPI_DIRECT_TRANSFER', ?, 'PENDING_APPROVAL', datetime('now'))
-        `).run(subPayId, societyId, targetPlanId, invNo, basePrice, taxAmt, totalAmt, ref);
-        db.prepare("UPDATE societies SET payment_status = 'PENDING_APPROVAL', updated_at = datetime('now') WHERE id = ?").run(societyId);
+            payment_gateway, gateway_order_id, gateway_payment_id, receipt_url, notes, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPI', 'UPI_DIRECT_TRANSFER', ?, ?, ?, 'PENDING_APPROVAL', datetime('now'))
+        `).run(subPayId, societyId, targetPlanId, invNo, basePrice, taxAmt, totalAmt, ref, receiptUrl || null, notes || null);
+        db.prepare("UPDATE societies SET payment_status = 'PENDING', updated_at = datetime('now') WHERE id = ?").run(societyId);
+        sendNotification({
+          userId: "usr_super_admin",
+          societyId: null,
+          title: `New Subscription Payment Proof (${invNo})`,
+          message: `${soc?.name || "A society"} submitted UPI payment of \u20B9${totalAmt} (UTR: ${ref}) for verification.`,
+          type: "PAYMENT_RECEIVED",
+          linkUrl: "/super-admin?tab=PAYMENTS"
+        });
         syncToMysqlAfterWrite();
         return sendJson(res, 201, {
           id: subPayId,
           invoiceNumber: invNo,
-          message: "UPI payment reference submitted successfully. Super Admin will verify and activate your subscription."
+          message: "UPI payment reference and receipt proof submitted successfully. Super Admin will verify and activate your subscription."
         });
       }
       if (pathname === "/api/society/members" && method === "GET") {
@@ -26274,7 +26635,8 @@ async function handleApiRequest(ctx) {
             title: `New Complaint ${complaintNumber} (${member.flat_number})`,
             message: `${member.full_name} reported [${category}]: ${title}`,
             channel: "IN_APP",
-            dedupKey: `cmp:${complaintId}`
+            dedupKey: `cmp:${complaintId}`,
+            linkUrl: `/society-admin?tab=COMPLAINTS&complaintId=${complaintId}`
           });
           db.exec("COMMIT");
           return sendJson(res, 201, { complaintId, complaintNumber, message: `Complaint ${complaintNumber} submitted.` });
@@ -26444,7 +26806,9 @@ async function createServer(options = { withVite: true }) {
     }
     if (url.pathname.startsWith("/uploads/")) {
       const safeFile = path5.basename(url.pathname);
-      const filePath = path5.join(process.cwd(), "data", "uploads", safeFile);
+      const isServerless2 = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+      const uploadDir = isServerless2 ? path5.join("/tmp", "uploads") : path5.join(process.cwd(), "data", "uploads");
+      const filePath = path5.join(uploadDir, safeFile);
       if (fs5.existsSync(filePath)) {
         res.writeHead(200, { "Content-Type": getStaticMimeType(safeFile) });
         fs5.createReadStream(filePath).pipe(res);

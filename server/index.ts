@@ -168,7 +168,9 @@ export async function createServer(options: { withVite?: boolean } = { withVite:
     // Serve uploaded files securely from /uploads/*
     if (url.pathname.startsWith('/uploads/')) {
       const safeFile = path.basename(url.pathname);
-      const filePath = path.join(process.cwd(), 'data', 'uploads', safeFile);
+      const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+      const uploadDir = isServerless ? path.join('/tmp', 'uploads') : path.join(process.cwd(), 'data', 'uploads');
+      const filePath = path.join(uploadDir, safeFile);
       if (fs.existsSync(filePath)) {
         res.writeHead(200, { 'Content-Type': getStaticMimeType(safeFile) });
         fs.createReadStream(filePath).pipe(res);

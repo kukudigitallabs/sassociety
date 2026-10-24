@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch, getStoredToken, setStoredToken } from './api.ts';
 import { type Language } from './i18n.ts';
+import { applyPlatformMeta } from './utils/meta.ts';
 import { PublicPortal } from './portals/PublicPortal.tsx';
 import { SuperAdminPortal } from './portals/SuperAdminPortal.tsx';
 import { SocietyAdminPortal } from './portals/SocietyAdminPortal.tsx';
@@ -76,6 +77,13 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadCurrentSession();
+    apiFetch('/api/public/plans')
+      .then((res) => {
+        if (res?.platform) {
+          applyPlatformMeta(res.platform);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   function handleLogout() {

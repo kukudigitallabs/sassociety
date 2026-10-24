@@ -18,6 +18,9 @@ import {
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, setStoredToken, openRazorpayCheckout } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
+import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
+import { GoogleAdBanner } from '../components/GoogleAdBanner.tsx';
+import { applyPlatformMeta } from '../utils/meta.ts';
 
 interface PublicPortalProps {
   lang: Language;
@@ -99,6 +102,9 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
       .then((res) => {
         setPlans(res.plans || []);
         setPlatform(res.platform || null);
+        if (res.platform) {
+          applyPlatformMeta(res.platform);
+        }
         if (res.plans?.length > 0) {
           setRegForm((prev) => ({ ...prev, planId: res.plans[0].id }));
         }
@@ -293,25 +299,12 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
       {/* Top Navigation Bar */}
       <header className="topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', minWidth: 0 }}>
-          <div
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: 10,
-              background: 'var(--primary)',
-              color: '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
-          >
-            <Building2 size={20} />
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 800, fontSize: 'clamp(1rem, 2.5vw, 1.15rem)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t(lang, 'appName')}</div>
-            <div className="topbar-subtitle" style={{ fontSize: '0.74rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Multi-Tenant RWA & Housing SaaS</div>
-          </div>
+          <ResponsiveLogo
+            logoUrl={platform?.logo_url}
+            platformName={platform?.platform_name || t(lang, 'appName')}
+            subtitle="Multi-Tenant RWA & Housing SaaS"
+            maxHeight={36}
+          />
         </div>
 
         <div className="topbar-actions">
@@ -345,6 +338,17 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
         </div>
       </header>
 
+      {/* Header Ad Slot (Google AdSense) */}
+      {platform?.google_adsense_enabled && platform?.google_ad_slot_header && (
+        <div style={{ maxWidth: 1200, margin: '1rem auto 0', padding: '0 1.5rem', width: '100%' }}>
+          <GoogleAdBanner
+            clientId={platform.google_adsense_client_id}
+            slotId={platform.google_ad_slot_header}
+            label="Sponsored Advertisement"
+          />
+        </div>
+      )}
+
       {/* Hero Section */}
       <section
         style={{
@@ -375,77 +379,67 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
             </div>
           </div>
 
-          {/* Interactive Role Access Card for Instant Verification */}
-          <div className="card" style={{ padding: 'clamp(1rem, 2.5vw, 1.5rem)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <h3 style={{ fontSize: '1.05rem' }}>Instant Role Access & Live Portals</h3>
-              <span className="badge badge-warning">Demo Accounts</span>
+          {/* Portal Sign-In Card */}
+          <div className="card" style={{ padding: 'clamp(1.25rem, 2.5vw, 1.75rem)', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-surface)' }}>
+            <div>
+              <h3 style={{ fontSize: '1.15rem', margin: 0 }}>{t(lang, 'login')}</h3>
+              <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                Sign in to your Society Admin, Staff, or Resident Member portal.
+              </p>
             </div>
-            <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
-              Test all 4 account levels with live PostgreSQL/SQLite persistence. Notice that the Super Admin panel is strictly separated from Society Admin, Staff, and Member portals:
-            </p>
-            <div style={{ display: 'grid', gap: '0.6rem' }}>
-              <button
-                type="button"
-                className="btn btn-secondary btn-multiline"
-                style={{ justifyContent: 'space-between', padding: '0.7rem 0.9rem', width: '100%', gap: '0.5rem' }}
-                onClick={() => quickLogin('superadmin@societyos.com', 'SuperAdmin@123')}
-              >
-                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
-                  <strong style={{ fontSize: '0.88rem' }}>1. Platform Super Admin (SaaS Owner)</strong>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>superadmin@societyos.com • Manage societies, plans, trials, revenue</span>
-                </span>
-                <ArrowRight size={16} style={{ flexShrink: 0 }} />
-              </button>
+            <form onSubmit={handleLogin} style={{ display: 'grid', gap: '1rem' }}>
+              <div className="form-group">
+                <label htmlFor="portal-email" style={{ fontSize: '0.82rem', fontWeight: 600 }}>Email Address</label>
+                <input
+                  id="portal-email"
+                  type="email"
+                  required
+                  autoComplete="username"
+                  className="input"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="name@society.com"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="portal-password" style={{ fontSize: '0.82rem', fontWeight: 600 }}>Password</label>
+                <input
+                  id="portal-password"
+                  type="password"
+                  required
+                  autoComplete="current-password"
+                  className="input"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '0.82rem', cursor: 'pointer', padding: 0 }}
+                  onClick={() => setActiveModal('FORGOT_PASSWORD')}
+                >
+                  Forgot password?
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={loading}>
+                  {loading ? 'Signing in...' : t(lang, 'login')}
+                </button>
+              </div>
+            </form>
 
+            {/* Instant Demo Access Button */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.85rem' }}>
               <button
                 type="button"
                 className="btn btn-secondary btn-multiline"
-                style={{ justifyContent: 'space-between', padding: '0.7rem 0.9rem', width: '100%', gap: '0.5rem' }}
+                style={{ justifyContent: 'space-between', padding: '0.75rem 0.95rem', width: '100%', gap: '0.5rem' }}
                 onClick={() => quickLogin('admin@greenvalley.com', 'Admin@123')}
+                title="Instant Demo Login as Society Admin"
               >
                 <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
                   <strong style={{ fontSize: '0.88rem' }}>2. Society Admin — Green Valley Residency (Demo)</strong>
                   <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>admin@greenvalley.com • Billing, payment verification, ledger, staff</span>
-                </span>
-                <ArrowRight size={16} style={{ flexShrink: 0 }} />
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-secondary btn-multiline"
-                style={{ justifyContent: 'space-between', padding: '0.7rem 0.9rem', width: '100%', gap: '0.5rem' }}
-                onClick={() => quickLogin('admin@royalpalms.com', 'Admin@123')}
-              >
-                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
-                  <strong style={{ fontSize: '0.88rem' }}>3. Society Admin — Royal Palms Enclave (14-Day Trial)</strong>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>admin@royalpalms.com • Independent tenant isolated from Green Valley</span>
-                </span>
-                <ArrowRight size={16} style={{ flexShrink: 0 }} />
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-secondary btn-multiline"
-                style={{ justifyContent: 'space-between', padding: '0.7rem 0.9rem', width: '100%', gap: '0.5rem' }}
-                onClick={() => quickLogin('cashier@greenvalley.com', 'Staff@123')}
-              >
-                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
-                  <strong style={{ fontSize: '0.88rem' }}>4. Society Staff — Cashier Role (Permission Scoped)</strong>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>cashier@greenvalley.com • Can verify payments, cannot delete members</span>
-                </span>
-                <ArrowRight size={16} style={{ flexShrink: 0 }} />
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-secondary btn-multiline"
-                style={{ justifyContent: 'space-between', padding: '0.7rem 0.9rem', width: '100%', gap: '0.5rem' }}
-                onClick={() => quickLogin('resident@greenvalley.com', 'Member@123')}
-              >
-                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
-                  <strong style={{ fontSize: '0.88rem' }}>5. Resident Member — Flat A-101 (Green Valley)</strong>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>resident@greenvalley.com • Pay bills, receipts, complaints, on-duty staff</span>
                 </span>
                 <ArrowRight size={16} style={{ flexShrink: 0 }} />
               </button>
@@ -552,6 +546,29 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
           </div>
         </div>
       </section>
+
+      {/* Footer Ad Slot (Google AdSense) */}
+      {platform?.google_adsense_enabled && platform?.google_ad_slot_footer && (
+        <div style={{ maxWidth: 1200, margin: '0 auto 2rem', padding: '0 1.5rem', width: '100%' }}>
+          <GoogleAdBanner
+            clientId={platform.google_adsense_client_id}
+            slotId={platform.google_ad_slot_footer}
+            label="Partner Advertisement"
+          />
+        </div>
+      )}
+
+      {/* Platform Public Footer */}
+      <footer style={{ borderTop: '1px solid var(--border)', padding: '2rem 1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: 'auto', background: 'var(--surface-sunken)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+          <ResponsiveLogo logoUrl={platform?.logo_url} platformName={platform?.platform_name || t(lang, 'appName')} maxHeight={24} />
+          <span>•</span>
+          <span>© {new Date().getFullYear()} {platform?.platform_name || 'SocietyOS SaaS'}. All rights reserved.</span>
+        </div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+          {platform?.meta_description || 'Enterprise Residential Welfare Association & Multi-Tenant Society Operating System'}
+        </div>
+      </footer>
 
       {/* MODAL 1: LOGIN */}
       {activeModal === 'LOGIN' && (
