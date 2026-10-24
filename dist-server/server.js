@@ -12,7 +12,11 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
 var __commonJS = (cb, mod) => function __require2() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -9310,7 +9314,7 @@ var require_shams = __commonJS({
         return true;
       }
       var obj = {};
-      var sym = Symbol("test");
+      var sym = /* @__PURE__ */ Symbol("test");
       var symObj = Object(sym);
       if (typeof sym === "string") {
         return false;
@@ -9369,7 +9373,7 @@ var require_has_symbols = __commonJS({
       if (typeof origSymbol("foo") !== "symbol") {
         return false;
       }
-      if (typeof Symbol("bar") !== "symbol") {
+      if (typeof /* @__PURE__ */ Symbol("bar") !== "symbol") {
         return false;
       }
       return hasSymbolSham();
@@ -12580,7 +12584,7 @@ var require_axios = __commonJS({
       });
       return byteStringHeaders;
     }
-    var $internals$1 = Symbol("internals");
+    var $internals$1 = /* @__PURE__ */ Symbol("internals");
     function normalizeHeader(header) {
       return header && String(header).trim().toLowerCase();
     }
@@ -13265,7 +13269,7 @@ var require_axios = __commonJS({
       }
       return url2;
     }
-    var $internals = Symbol("internals");
+    var $internals = /* @__PURE__ */ Symbol("internals");
     function countHandlers(handlers) {
       return handlers ? handlers.length : 0;
     }
@@ -13861,7 +13865,7 @@ var require_axios = __commonJS({
         }
       });
     }
-    var kInternals = Symbol("internals");
+    var kInternals = /* @__PURE__ */ Symbol("internals");
     var AxiosTransformStream = class extends stream.Transform {
       constructor(options) {
         options = utils$1.toFlatObject(options, {
@@ -14726,15 +14730,15 @@ var require_axios = __commonJS({
       https: httpsFollow
     } = followRedirects;
     var isHttps = /https:?/;
-    var kAxiosSocketListener = Symbol("axios.http.socketListener");
-    var kAxiosCurrentReq = Symbol("axios.http.currentReq");
+    var kAxiosSocketListener = /* @__PURE__ */ Symbol("axios.http.socketListener");
+    var kAxiosCurrentReq = /* @__PURE__ */ Symbol("axios.http.currentReq");
     function handleSocketError(err) {
       const current = this[kAxiosCurrentReq];
       if (current && !current.destroyed) {
         current.destroy(err);
       }
     }
-    var kAxiosInstalledTunnel = Symbol("axios.http.installedTunnel");
+    var kAxiosInstalledTunnel = /* @__PURE__ */ Symbol("axios.http.installedTunnel");
     var tunnelingAgentCache = /* @__PURE__ */ new Map();
     var tunnelingAgentCacheUser = /* @__PURE__ */ new WeakMap();
     var NODE_NATIVE_ENV_PROXY_SUPPORT = {
