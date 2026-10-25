@@ -1703,11 +1703,11 @@ if ($cleanPath === '/api/society/settings') {
     if ($method === 'PUT' || $method === 'POST') {
         $now = date('Y-m-d H:i:s');
         if (!empty($reqData['name']) && $pdo) {
-            $pdo->prepare("UPDATE societies SET name = ?, address = ?, contact_email = ?, contact_phone = ?, updated_at = ? WHERE id = ?")
+            $pdo->prepare("UPDATE societies SET name = ?, logo_url = COALESCE(?, logo_url), address = ?, contact_phone = ?, updated_at = ? WHERE id = ?")
                 ->execute([
                     $reqData['name'] ?? $society['name'],
+                    $reqData['logoUrl'] ?? null,
                     $reqData['address'] ?? $society['address'],
-                    $reqData['contactEmail'] ?? $society['contact_email'],
                     $reqData['contactPhone'] ?? $society['contact_phone'],
                     $now,
                     $activeSocId
@@ -2075,6 +2075,44 @@ if ($cleanPath === '/api/society/blocks') {
     }
 }
 
+// 3.12a2 EDIT APARTMENT BLOCK (PUT)
+if ((preg_match('#^/api/society/blocks/([^/]+)$#', $cleanPath, $bm) || $cleanPath === '/api/society/blocks') && $method === 'PUT') {
+    $blockId = $bm[1] ?? ($reqData['id'] ?? '');
+    $name = trim($reqData['name'] ?? '');
+    $totalFloors = isset($reqData['totalFloors']) ? intval($reqData['totalFloors']) : null;
+    $desc = isset($reqData['description']) ? trim($reqData['description']) : null;
+    if (!$name) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Block name is required.']);
+        exit;
+    }
+    if ($pdo && !empty($activeSocId) && $blockId) {
+        $st = $pdo->prepare("SELECT * FROM apartment_blocks WHERE id = ? AND society_id = ? LIMIT 1");
+        $st->execute([$blockId, $activeSocId]);
+        $existing = $st->fetch();
+        if (!$existing) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Block not found.']);
+            exit;
+        }
+        $dup = $pdo->prepare("SELECT id FROM apartment_blocks WHERE society_id = ? AND LOWER(name) = LOWER(?) AND id != ? LIMIT 1");
+        $dup->execute([$activeSocId, $name, $blockId]);
+        if ($dup->fetch()) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Another block with this name already exists in your society.']);
+            exit;
+        }
+        $oldName = $existing['name'];
+        $upd = $pdo->prepare("UPDATE apartment_blocks SET name = ?, total_floors = COALESCE(?, total_floors), description = COALESCE(?, description) WHERE id = ? AND society_id = ?");
+        $upd->execute([$name, $totalFloors, $desc, $blockId, $activeSocId]);
+        $syncHh = $pdo->prepare("UPDATE households SET block_name = ? WHERE society_id = ? AND (block_id = ? OR block_name = ?)");
+        $syncHh->execute([$name, $activeSocId, $blockId, $oldName]);
+    }
+    http_response_code(200);
+    echo json_encode(['message' => "Block updated to '{$name}'. Associated flats synced."]);
+    exit;
+}
+
 // 3.12 SOCIETY MEMBERS
 if ($cleanPath === '/api/society/members') {
     if ($method === 'GET') {
@@ -2335,6 +2373,54 @@ if (preg_match('#^/api/society/members/([^/]+)$#', $cleanPath, $m) && $method ==
     exit;
 }
 
+if (preg_match('#^/api/society/members/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+    $memberId = $m[1];
+    if ($pdo && !empty($activeSocId)) {
+        try {
+            $mRow = $pdo->prepare("SELECT * FROM society_members WHERE id = ? AND society_id = ? LIMIT 1");
+            $mRow->execute([$memberId, $activeSocId]);
+            $member = $mRow->fetch();
+            if ($member) {
+                $hhId = $member['household_id'];
+                $otherMemStmt = $pdo->prepare("SELECT id FROM society_members WHERE household_id = ? AND id != ?");
+                $otherMemStmt->execute([$hhId, $memberId]);
+                $otherMembers = $otherMemStmt->fetchAll() ?: [];
+
+                if (empty($otherMembers)) {
+                    $pdo->prepare("DELETE FROM member_bills WHERE household_id = ? AND society_id = ?")->execute([$hhId, $activeSocId]);
+                    $pdo->prepare("DELETE FROM payments WHERE household_id = ? AND society_id = ?")->execute([$hhId, $activeSocId]);
+                    $pdo->prepare("DELETE FROM households WHERE id = ? AND society_id = ?")->execute([$hhId, $activeSocId]);
+                } else {
+                    if (!empty($member['is_primary_member'])) {
+                        $newPrimaryId = $otherMembers[0]['id'];
+                        $pdo->prepare("UPDATE society_members SET is_primary_member = 1 WHERE id = ?")->execute([$newPrimaryId]);
+                        $pdo->prepare("UPDATE households SET primary_member_id = ? WHERE id = ?")->execute([$newPrimaryId, $hhId]);
+                    }
+                }
+
+                if (!empty($member['user_id'])) {
+                    $pdo->prepare("DELETE FROM complaint_attachments WHERE uploaded_by = ? AND society_id = ?")->execute([$member['user_id'], $activeSocId]);
+                }
+                $pdo->prepare("DELETE FROM complaints WHERE member_id = ? AND society_id = ?")->execute([$memberId, $activeSocId]);
+                $pdo->prepare("DELETE FROM suggestions WHERE member_id = ? AND society_id = ?")->execute([$memberId, $activeSocId]);
+                $pdo->prepare("DELETE FROM society_members WHERE id = ? AND society_id = ?")->execute([$memberId, $activeSocId]);
+
+                if (!empty($member['user_id'])) {
+                    $uStmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+                    $uStmt->execute([$member['user_id']]);
+                    $u = $uStmt->fetch();
+                    if ($u && $u['role'] === 'MEMBER') {
+                        $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$member['user_id']]);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Member deleted successfully.']);
+    exit;
+}
+
 // 3.12c HOUSEHOLD TRANSFER & OPENING BALANCE
 if (preg_match('#^/api/society/households/([^/]+)/transfer$#', $cleanPath, $m) && $method === 'POST') {
     $hhId = $m[1];
@@ -2466,14 +2552,41 @@ if ($cleanPath === '/api/society/bills' && $method === 'GET') {
     $bills = [];
     if ($pdo && !empty($activeSocId)) {
         try {
-            $bills = $pdo->query("
-                SELECT b.*, h.flat_number, h.block_name, sm.full_name as primary_member_name
+            $month = isset($_GET['month']) && is_numeric($_GET['month']) ? intval($_GET['month']) : null;
+            $status = isset($_GET['status']) && $_GET['status'] !== '' ? $_GET['status'] : null;
+            $search = isset($_GET['search']) ? trim(strtolower($_GET['search'])) : null;
+
+            $sql = "
+                SELECT b.*,
+                       COALESCE(h.flat_number, '') as flat_number,
+                       COALESCE(h.normalized_flat_number, '') as normalized_flat_number,
+                       COALESCE(h.block_name, 'A') as block_name,
+                       COALESCE(sm.full_name, 'Household Member') as member_name,
+                       COALESCE(sm.full_name, 'Household Member') as primary_member_name,
+                       sm.email as member_email,
+                       sm.phone as member_phone
                 FROM member_bills b
                 LEFT JOIN households h ON h.id = b.household_id
                 LEFT JOIN society_members sm ON sm.id = b.member_id
-                WHERE b.society_id = " . $pdo->quote($activeSocId) . "
-                ORDER BY b.created_at DESC
-            ")->fetchAll() ?: [];
+                WHERE b.society_id = " . $pdo->quote($activeSocId);
+
+            if ($month !== null) {
+                $sql .= " AND b.billing_month = " . intval($month);
+            }
+            if ($status !== null) {
+                $sql .= " AND b.status = " . $pdo->quote($status);
+            }
+            $sql .= " ORDER BY b.billing_year DESC, b.billing_month DESC, b.created_at DESC";
+
+            $rawBills = $pdo->query($sql)->fetchAll() ?: [];
+            if ($search) {
+                $bills = array_values(array_filter($rawBills, function($b) use ($search) {
+                    $hay = strtolower(($b['bill_number'] ?? '') . ' ' . ($b['flat_number'] ?? '') . ' ' . ($b['member_name'] ?? ''));
+                    return strpos($hay, $search) !== false;
+                }));
+            } else {
+                $bills = $rawBills;
+            }
         } catch (\Throwable $e) {}
     }
 
@@ -2521,7 +2634,66 @@ if ($cleanPath === '/api/society/charge-categories') {
     }
 }
 
-// 3.13b GENERATE & PUBLISH BILLS
+// 3.13b SUPPLEMENTARY / ADJUSTMENT BILLS
+if ($cleanPath === '/api/society/bills/adjustment' && $method === 'POST') {
+    $hhId = $reqData['householdId'] ?? '';
+    $month = intval($reqData['billingMonth'] ?? date('n'));
+    $year = intval($reqData['billingYear'] ?? date('Y'));
+    $chargeCatId = $reqData['chargeCategoryId'] ?? '';
+    $amt = floatval($reqData['amount'] ?? 0);
+    $reason = trim($reqData['reason'] ?? '');
+    $dueDate = $reqData['dueDate'] ?? date('Y-m-15');
+
+    if (!$hhId || !$month || !$year || !$chargeCatId || $amt <= 0 || !$reason) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Household, month, year, charge category, amount, and reason are required.']);
+        exit;
+    }
+
+    $billId = uuid_v4();
+    if ($pdo && !empty($activeSocId)) {
+        try {
+            $hStmt = $pdo->prepare("SELECT * FROM households WHERE id = ? AND society_id = ? LIMIT 1");
+            $hStmt->execute([$hhId, $activeSocId]);
+            $hh = $hStmt->fetch();
+
+            $cStmt = $pdo->prepare("SELECT * FROM charge_categories WHERE id = ? AND society_id = ? LIMIT 1");
+            $cStmt->execute([$chargeCatId, $activeSocId]);
+            $cat = $cStmt->fetch();
+
+            if ($hh && $cat) {
+                $flatClean = preg_replace('/[^A-Z0-9]/', '', strtoupper($hh['normalized_flat_number']));
+                $billNum = sprintf('SUPP-%04d%02d-%s-%s', $year, $month, substr($flatClean, 0, 6), strtoupper(substr(uniqid(), -4)));
+
+                $pdo->prepare("
+                    INSERT INTO member_bills (
+                        id, society_id, household_id, member_id, bill_number, billing_month, billing_year,
+                        bill_type, adjustment_reason, status, subtotal_amount, total_amount, paid_amount, balance_amount,
+                        due_date, issued_at, created_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'SUPPLEMENTARY', ?, 'UNPAID', ?, ?, 0, ?, ?, NOW(), ?, NOW(), NOW())
+                ")->execute([
+                    $billId, $activeSocId, $hh['id'], $hh['primary_member_id'], $billNum,
+                    $month, $year, $reason, $amt, $amt, $amt, $dueDate, $auth['userId'] ?? null
+                ]);
+
+                $pdo->prepare("
+                    INSERT INTO bill_items (
+                        id, society_id, bill_id, household_id, charge_category_id, category_name,
+                        billing_month, billing_year, description, amount, is_adjustment, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
+                ")->execute([
+                    uuid_v4(), $activeSocId, $billId, $hh['id'], $cat['id'], $cat['name'],
+                    $month, $year, "{$cat['name']} Adjustment: {$reason}", $amt
+                ]);
+            }
+        } catch (\Throwable $e) {}
+    }
+    http_response_code(201);
+    echo json_encode(['message' => 'Supplementary/adjustment bill issued successfully.']);
+    exit;
+}
+
+// 3.13c GENERATE & PUBLISH BILLS
 if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
     $month = intval($reqData['billingMonth'] ?? $reqData['month'] ?? date('n'));
     $year = intval($reqData['billingYear'] ?? $reqData['year'] ?? date('Y'));
@@ -2534,6 +2706,7 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
     $creditAmount = floatval($reqData['creditAmount'] ?? 0);
 
     $generatedCount = 0;
+    $skippedFlats = [];
     if ($pdo && !empty($activeSocId)) {
         try {
             $hhQuery = "SELECT * FROM households WHERE society_id = " . $pdo->quote($activeSocId) . " AND status != 'ARCHIVED'";
@@ -2549,13 +2722,24 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
             }
             if (empty($cats)) {
                 $cats = $pdo->query("SELECT * FROM charge_categories WHERE society_id = " . $pdo->quote($activeSocId) . " AND is_active = 1")->fetchAll() ?: [];
+                if (empty($cats)) {
+                    $defaultCatId = uuid_v4();
+                    $pdo->prepare("
+                        INSERT INTO charge_categories (id, society_id, name, code, description, default_amount, billing_frequency, applicable_flats, due_day, is_single_charge_per_period, is_active, created_at, updated_at)
+                        VALUES (?, ?, 'Monthly Maintenance', 'MAINTENANCE', 'Standard monthly society maintenance charges', 1500, 'MONTHLY', 'ALL', 10, 1, 1, NOW(), NOW())
+                    ")->execute([$defaultCatId, $activeSocId]);
+                    $cats = $pdo->query("SELECT * FROM charge_categories WHERE society_id = " . $pdo->quote($activeSocId) . " AND is_active = 1")->fetchAll() ?: [];
+                }
             }
 
             foreach ($households as $hh) {
                 // Check duplicate regular bill
                 $chkBill = $pdo->prepare("SELECT id FROM member_bills WHERE society_id = ? AND household_id = ? AND billing_month = ? AND billing_year = ? AND bill_type = 'REGULAR' AND status != 'CANCELLED' LIMIT 1");
                 $chkBill->execute([$activeSocId, $hh['id'], $month, $year]);
-                if ($chkBill->fetch()) continue;
+                if ($chkBill->fetch()) {
+                    $skippedFlats[] = $hh['flat_number'];
+                    continue;
+                }
 
                 $billId = uuid_v4();
                 $flatClean = preg_replace('/[^A-Z0-9]/', '', strtoupper($hh['normalized_flat_number']));
@@ -2571,7 +2755,7 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
                     ")->execute([uuid_v4(), $activeSocId, $billId, $hh['id'], $cat['id'], $cat['name'], "{$cat['name']} ({$month}/{$year})", $amt, $month, $year]);
                 }
 
-                // Calculate previous balance from unpaid prior regular monthly bills (opening balance is tracked separately)
+                // Calculate previous balance from unpaid prior regular monthly bills
                 $prevRow = $pdo->prepare("
                     SELECT COALESCE(SUM(balance_amount), 0) as prev
                     FROM member_bills
@@ -2602,8 +2786,21 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
             }
         } catch (\Throwable $e) {}
     }
+
+    if ($generatedCount === 0 && !empty($skippedFlats)) {
+        http_response_code(200);
+        echo json_encode([
+            'createdCount' => 0,
+            'message' => "0 new bills generated: Flat(s) " . implode(', ', $skippedFlats) . " already have a regular bill for {$month}/{$year}. Use 'Issue Adjustment / Supplementary Bill' to add extra charges."
+        ]);
+        exit;
+    }
+
     http_response_code(200);
-    echo json_encode(['message' => "Generated {$generatedCount} bills for {$month}/{$year}."]);
+    echo json_encode([
+        'createdCount' => $generatedCount,
+        'message' => "Generated {$generatedCount} bills for {$month}/{$year}." . (!empty($skippedFlats) ? " (" . count($skippedFlats) . " flats skipped: already billed)" : "")
+    ]);
     exit;
 }
 

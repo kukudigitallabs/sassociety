@@ -22115,6 +22115,12 @@ function resolveRazorpayCredentials(societyId) {
     keySecret: envKeySecret || dbSecret
   };
 }
+function isValid10DigitPhone(phone) {
+  if (!phone) return false;
+  const digits = String(phone).replace(/\D/g, "");
+  const tenDigits = digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits;
+  return /^[6-9]\d{9}$/.test(tenDigits);
+}
 function sendJson(res, status, data) {
   const payload = JSON.stringify(data);
   res.writeHead(status, {
@@ -22559,6 +22565,9 @@ async function handleApiRequest(ctx) {
       if (!adminName || !email || !phone || !password || !societyName || !address || !planId) {
         return sendJson(res, 400, { error: "All mandatory society and administrator fields are required." });
       }
+      if (!isValid10DigitPhone(phone)) {
+        return sendJson(res, 400, { error: "Please enter a valid 10-digit mobile number starting with 6, 7, 8, or 9." });
+      }
       const cleanEmail = String(email).trim().toLowerCase();
       const existingUser = db.prepare("SELECT id FROM users WHERE email = ?").get(cleanEmail);
       if (existingUser) {
@@ -22904,6 +22913,9 @@ async function handleApiRequest(ctx) {
       } = body;
       if (!fullName || !email || !phone || !flatNumber) {
         return sendJson(res, 400, { error: "Full name, email, mobile number, and flat/house number are required." });
+      }
+      if (!isValid10DigitPhone(phone)) {
+        return sendJson(res, 400, { error: "Please enter a valid 10-digit mobile number starting with 6, 7, 8, or 9." });
       }
       const cleanEmail = String(email).trim().toLowerCase();
       const existingUser = db.prepare("SELECT id FROM users WHERE email = ?").get(cleanEmail);
@@ -24546,6 +24558,28 @@ async function handleApiRequest(ctx) {
         syncToMysqlAfterWrite();
         return sendJson(res, 201, { id, name: blockName, message: "Apartment block added." });
       }
+      const editBlockMatch = pathname.match(/^\/api\/society\/blocks\/([^/]+)$/);
+      if ((editBlockMatch || pathname === "/api/society/blocks") && method === "PUT") {
+        const blockId = editBlockMatch ? editBlockMatch[1] : body.id;
+        const { name, totalFloors, description } = body;
+        if (!name || !String(name).trim()) return sendJson(res, 400, { error: "Block name is required." });
+        const newBlockName = String(name).trim();
+        const existing = db.prepare("SELECT * FROM apartment_blocks WHERE id = ? AND society_id = ?").get(blockId, societyId);
+        if (!existing) return sendJson(res, 404, { error: "Block not found." });
+        const duplicate = db.prepare("SELECT id FROM apartment_blocks WHERE society_id = ? AND LOWER(name) = LOWER(?) AND id != ? LIMIT 1").get(societyId, newBlockName, blockId);
+        if (duplicate) return sendJson(res, 400, { error: "Another block with this name already exists in your society." });
+        const oldName = existing.name;
+        db.prepare(`
+          UPDATE apartment_blocks
+          SET name = ?,
+              total_floors = COALESCE(?, total_floors),
+              description = COALESCE(?, description)
+          WHERE id = ? AND society_id = ?
+        `).run(newBlockName, totalFloors !== void 0 ? Number(totalFloors) : null, description !== void 0 ? String(description) : null, blockId, societyId);
+        db.prepare("UPDATE households SET block_name = ? WHERE society_id = ? AND (block_id = ? OR block_name = ?)").run(newBlockName, societyId, blockId, oldName);
+        syncToMysqlAfterWrite();
+        return sendJson(res, 200, { message: `Block updated to '${newBlockName}'. Associated flats synced.` });
+      }
       if (pathname === "/api/society/members" && method === "POST") {
         const {
           fullName,
@@ -24566,6 +24600,12 @@ async function handleApiRequest(ctx) {
           openingBalance = 0,
           openingBalanceNotes = ""
         } = body;
+        if (!fullName || !email || !phone || !flatNumber) {
+          return sendJson(res, 400, { error: "Full name, email, phone, and flat number are required." });
+        }
+        if (!isValid10DigitPhone(phone)) {
+          return sendJson(res, 400, { error: "Please enter a valid 10-digit mobile number starting with 6, 7, 8, or 9." });
+        }
         if (!fullName || !email || !phone || !flatNumber) {
           return sendJson(res, 400, { error: "Full name, email, phone, and flat/house number are required." });
         }
@@ -24726,6 +24766,52 @@ async function handleApiRequest(ctx) {
         });
         return sendJson(res, 200, { message: "Member record updated." });
       }
+      if (memberActionMatch && method === "DELETE") {
+        const memberId = memberActionMatch[1];
+        const member = db.prepare("SELECT * FROM society_members WHERE id = ? AND society_id = ?").get(memberId, societyId);
+        if (!member) return sendJson(res, 404, { error: "Member not found in your society." });
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const hhId = member.household_id;
+          const otherMembers = db.prepare("SELECT id FROM society_members WHERE household_id = ? AND id != ?").all(hhId, memberId);
+          if (otherMembers.length === 0) {
+            db.prepare("DELETE FROM member_bills WHERE household_id = ? AND society_id = ?").run(hhId, societyId);
+            db.prepare("DELETE FROM payments WHERE household_id = ? AND society_id = ?").run(hhId, societyId);
+            db.prepare("DELETE FROM households WHERE id = ? AND society_id = ?").run(hhId, societyId);
+          } else {
+            if (member.is_primary_member) {
+              const newPrimaryId = otherMembers[0].id;
+              db.prepare("UPDATE society_members SET is_primary_member = 1 WHERE id = ?").run(newPrimaryId);
+              db.prepare("UPDATE households SET primary_member_id = ? WHERE id = ?").run(newPrimaryId, hhId);
+            }
+          }
+          db.prepare("DELETE FROM complaint_attachments WHERE uploaded_by = ? AND society_id = ?").run(member.user_id, societyId);
+          db.prepare("DELETE FROM complaints WHERE member_id = ? AND society_id = ?").run(memberId, societyId);
+          db.prepare("DELETE FROM suggestions WHERE member_id = ? AND society_id = ?").run(memberId, societyId);
+          db.prepare("DELETE FROM society_members WHERE id = ? AND society_id = ?").run(memberId, societyId);
+          if (member.user_id) {
+            const u = db.prepare("SELECT role FROM users WHERE id = ?").get(member.user_id);
+            if (u && u.role === "MEMBER") {
+              db.prepare("DELETE FROM users WHERE id = ?").run(member.user_id);
+            }
+          }
+          logAudit({
+            societyId,
+            actorUserId: auth?.userId,
+            actorRole: auth?.role || "SOCIETY_ADMIN",
+            action: "MEMBER_DELETED",
+            entityType: "SOCIETY_MEMBER",
+            entityId: memberId,
+            details: { memberName: member.full_name, flatNumber: member.flat_number }
+          });
+          db.exec("COMMIT");
+          syncToMysqlAfterWrite();
+          return sendJson(res, 200, { message: `Member ${member.full_name} (Flat ${member.flat_number}) deleted successfully.` });
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
+        }
+      }
       const transferHhMatch = pathname.match(/^\/api\/society\/households\/([^/]+)\/transfer$/);
       if (transferHhMatch && method === "POST") {
         const hhId = transferHhMatch[1];
@@ -24872,12 +24958,19 @@ async function handleApiRequest(ctx) {
         const status = url.searchParams.get("status");
         const search = (url.searchParams.get("search") || "").trim().toLowerCase();
         const bills = db.prepare(`
-          SELECT mb.*, h.flat_number, h.normalized_flat_number, h.block_name, sm.full_name as member_name, sm.email as member_email, sm.phone as member_phone
+          SELECT mb.*,
+                 COALESCE(h.flat_number, '') as flat_number,
+                 COALESCE(h.normalized_flat_number, '') as normalized_flat_number,
+                 COALESCE(h.block_name, 'A') as block_name,
+                 COALESCE(sm.full_name, 'Household Member') as member_name,
+                 COALESCE(sm.full_name, 'Household Member') as primary_member_name,
+                 sm.email as member_email,
+                 sm.phone as member_phone
           FROM member_bills mb
-          JOIN households h ON h.id = mb.household_id
+          LEFT JOIN households h ON h.id = mb.household_id
           LEFT JOIN society_members sm ON sm.id = mb.member_id
           WHERE mb.society_id = ?
-          ORDER BY mb.billing_year DESC, mb.billing_month DESC, h.normalized_flat_number ASC
+          ORDER BY mb.billing_year DESC, mb.billing_month DESC, mb.created_at DESC
         `).all(societyId);
         const items = db.prepare("SELECT * FROM bill_items WHERE society_id = ?").all(societyId);
         const itemsByBill = /* @__PURE__ */ new Map();
@@ -24917,17 +25010,22 @@ async function handleApiRequest(ctx) {
         if (!m || m < 1 || m > 12 || !y || y < 2020) {
           return sendJson(res, 400, { error: "Valid billingMonth (1-12) and billingYear are required." });
         }
-        if (!Array.isArray(chargeCategoryIds) || chargeCategoryIds.length === 0) {
-          return sendJson(res, 400, { error: "At least one charge category must be selected." });
+        let categories = db.prepare("SELECT * FROM charge_categories WHERE society_id = ? AND is_active = 1").all(societyId);
+        if (categories.length === 0) {
+          const defaultCatId = uuid();
+          db.prepare(`
+            INSERT INTO charge_categories (id, society_id, name, code, description, default_amount, billing_frequency, applicable_flats, due_day, is_single_charge_per_period, is_active)
+            VALUES (?, ?, 'Monthly Maintenance', 'MAINTENANCE', 'Standard monthly society maintenance charges', 1500, 'MONTHLY', 'ALL', 10, 1, 1)
+          `).run(defaultCatId, societyId);
+          categories = db.prepare("SELECT * FROM charge_categories WHERE society_id = ? AND is_active = 1").all(societyId);
+        }
+        const selectedCategories = Array.isArray(chargeCategoryIds) && chargeCategoryIds.length > 0 ? categories.filter((c) => chargeCategoryIds.includes(c.id)) : categories;
+        if (selectedCategories.length === 0) {
+          return sendJson(res, 400, { error: "Please select at least one valid charge category to generate bills." });
         }
         const targetHouseholds = householdId ? db.prepare("SELECT * FROM households WHERE id = ? AND society_id = ? AND status = 'ACTIVE'").all(householdId, societyId) : db.prepare("SELECT * FROM households WHERE society_id = ? AND status = 'ACTIVE'").all(societyId);
         if (targetHouseholds.length === 0) {
           return sendJson(res, 404, { error: "No active households found for bill generation." });
-        }
-        const categories = db.prepare("SELECT * FROM charge_categories WHERE society_id = ? AND is_active = 1").all(societyId);
-        const selectedCategories = categories.filter((c) => chargeCategoryIds.includes(c.id));
-        if (selectedCategories.length === 0) {
-          return sendJson(res, 400, { error: "Selected charge categories were not found in your society." });
         }
         const billDueDate = dueDate || `${y}-${String(m).padStart(2, "0")}-10`;
         const createdBills = [];
@@ -25037,7 +25135,7 @@ async function handleApiRequest(ctx) {
           if (createdBills.length === 0 && skippedDuplicates.length > 0) {
             db.exec("ROLLBACK");
             return sendJson(res, 409, {
-              error: `Duplicate bills prevented: All target flats (${skippedDuplicates.join(", ")}) already have bills generated for ${m}/${y}.`
+              error: `Duplicate bills prevented: All target flat(s) (${skippedDuplicates.join(", ")}) already have regular bills for ${m}/${y}. To add extra charges, please use 'Issue Adjustment / Supplementary Bill'.`
             });
           }
           logAudit({
@@ -26239,6 +26337,9 @@ async function handleApiRequest(ctx) {
           brandPrimaryColor,
           customEnrollmentFields
         } = body;
+        if (contactPhone && !isValid10DigitPhone(contactPhone)) {
+          return sendJson(res, 400, { error: "Please enter a valid 10-digit society contact phone number." });
+        }
         db.prepare(`
           UPDATE societies
           SET name = COALESCE(?, name),
@@ -26247,11 +26348,10 @@ async function handleApiRequest(ctx) {
               city = COALESCE(?, city),
               state = COALESCE(?, state),
               pincode = COALESCE(?, pincode),
-              contact_email = COALESCE(?, contact_email),
               contact_phone = COALESCE(?, contact_phone),
               updated_at = datetime('now')
           WHERE id = ?
-        `).run(name ?? null, logoUrl ?? null, address ?? null, city ?? null, state ?? null, pincode ?? null, contactEmail ?? null, contactPhone ?? null, societyId);
+        `).run(name ?? null, logoUrl ?? null, address ?? null, city ?? null, state ?? null, pincode ?? null, contactPhone ?? null, societyId);
         db.prepare(`
           UPDATE society_settings
           SET upi_enabled = COALESCE(?, upi_enabled),

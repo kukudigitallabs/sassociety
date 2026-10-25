@@ -16,7 +16,7 @@ import {
   KeyRound,
   ArrowRight,
 } from 'lucide-react';
-import { apiFetch, uploadFileAsBase64, setStoredToken, openRazorpayCheckout } from '../api.ts';
+import { apiFetch, uploadFileAsBase64, setStoredToken, openRazorpayCheckout, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
 import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
 import { GoogleAdBanner } from '../components/GoogleAdBanner.tsx';
@@ -206,11 +206,18 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
 
   async function handleRegisterSociety(e: React.FormEvent) {
     e.preventDefault();
+    if (!isValid10DigitPhone(regForm.phone)) {
+      notify('Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.', 'error');
+      return;
+    }
     setLoading(true);
     try {
       const res = await apiFetch('/api/public/register-society', {
         method: 'POST',
-        body: regForm,
+        body: {
+          ...regForm,
+          phone: clean10DigitPhone(regForm.phone),
+        },
       });
       if (res.paymentOrder) {
         setPendingOrder(res.paymentOrder);
@@ -273,11 +280,18 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
 
   async function handleEnrollSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!isValid10DigitPhone(enrollForm.phone)) {
+      notify('Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.', 'error');
+      return;
+    }
     setLoading(true);
     try {
       const res = await apiFetch(`/api/public/enroll/${encodeURIComponent(enrollCode.trim())}`, {
         method: 'POST',
-        body: enrollForm,
+        body: {
+          ...enrollForm,
+          phone: clean10DigitPhone(enrollForm.phone),
+        },
       });
       notify(res.message);
       // Auto-login newly enrolled resident
@@ -799,15 +813,16 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
 
                 <div className="form-grid">
                   <div className="form-group">
-                    <label>Mobile Phone Number *</label>
+                    <label>Mobile Phone Number (10-Digit Mobile) *</label>
                     <input
                       type="tel"
                       required
                       autoComplete="tel"
+                      maxLength={10}
                       className="input"
                       value={regForm.phone}
                       onChange={(e) => setRegForm({ ...regForm, phone: e.target.value })}
-                      placeholder="+91-98765-43210"
+                      placeholder="e.g. 9876543210"
                     />
                   </div>
                   <div className="form-group">
@@ -1058,10 +1073,12 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
 
                 <div className="form-grid">
                   <div className="form-group">
-                    <label>Mobile Phone Number *</label>
+                    <label>Mobile Phone Number (10-Digit Mobile) *</label>
                     <input
                       type="tel"
                       required
+                      maxLength={10}
+                      placeholder="e.g. 9876543210"
                       className="input"
                       value={enrollForm.phone}
                       onChange={(e) => setEnrollForm({ ...enrollForm, phone: e.target.value })}

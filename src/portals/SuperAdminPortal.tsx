@@ -39,7 +39,7 @@ import {
   Receipt,
   Printer,
 } from 'lucide-react';
-import { apiFetch, downloadCsv, uploadFileAsBase64 } from '../api.ts';
+import { apiFetch, downloadCsv, uploadFileAsBase64, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
 import { UpiQrCard } from '../components/UpiQrCard.tsx';
 import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
@@ -2014,10 +2014,17 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                if (newSocietyForm.phone && !isValid10DigitPhone(newSocietyForm.phone)) {
+                  notify('Admin phone must be a valid 10-digit mobile number starting with 6, 7, 8, or 9.', 'error');
+                  return;
+                }
                 try {
                   const res = await apiFetch('/api/super-admin/societies', {
                     method: 'POST',
-                    body: newSocietyForm,
+                    body: {
+                      ...newSocietyForm,
+                      phone: clean10DigitPhone(newSocietyForm.phone),
+                    },
                   });
                   notify(res.message);
                   setModalMode('NONE');
@@ -2044,8 +2051,16 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   <input type="email" required className="input" value={newSocietyForm.email} onChange={(e) => setNewSocietyForm({ ...newSocietyForm, email: e.target.value })} />
                 </div>
                 <div className="form-group">
-                  <label>Admin Phone *</label>
-                  <input type="tel" required className="input" value={newSocietyForm.phone} onChange={(e) => setNewSocietyForm({ ...newSocietyForm, phone: e.target.value })} />
+                  <label>Admin Phone (10-Digit Mobile) *</label>
+                  <input
+                    type="tel"
+                    required
+                    maxLength={10}
+                    placeholder="e.g. 9876543210"
+                    className="input"
+                    value={newSocietyForm.phone}
+                    onChange={(e) => setNewSocietyForm({ ...newSocietyForm, phone: e.target.value })}
+                  />
                 </div>
               </div>
               <div className="form-group">

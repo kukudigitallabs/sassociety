@@ -368,4 +368,18 @@ function openSandboxCheckoutModal(opts: {
   };
 }
 
+export function isValid10DigitPhone(phone?: string | null): boolean {
+  if (!phone) return false;
+  const digits = String(phone).replace(/\D/g, '');
+  const tenDigits = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+  return /^[6-9]\d{9}$/.test(tenDigits);
+}
+
+export function clean10DigitPhone(phone?: string | null): string {
+  if (!phone) return '';
+  const digits = String(phone).replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  return digits.slice(-10);
+}
+
 

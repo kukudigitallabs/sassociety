@@ -37,8 +37,11 @@ import {
   Image as ImageIcon,
   FileText,
   Eye,
+  Lock,
+  Edit2,
+  Upload,
 } from 'lucide-react';
-import { apiFetch, uploadFileAsBase64, downloadCsv, openRazorpayCheckout } from '../api.ts';
+import { apiFetch, uploadFileAsBase64, downloadCsv, openRazorpayCheckout, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
 import { UpiQrCard } from '../components/UpiQrCard.tsx';
 import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
@@ -230,6 +233,12 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
   const [wipeMembersAndFlats, setWipeMembersAndFlats] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
+  // State for Block Management & Logo Upload
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [editingBlockName, setEditingBlockName] = useState<string>('');
+  const [isUpdatingBlock, setIsUpdatingBlock] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+
   const [suppBillForm, setSuppBillForm] = useState({
     householdId: '',
     billingMonth: new Date().getMonth() + 1,
@@ -333,7 +342,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
         if (catsRes.categories?.length > 0 && genBillForm.chargeCategoryIds.length === 0) {
           setGenBillForm((prev) => ({
             ...prev,
-            chargeCategoryIds: catsRes.categories.slice(0, 3).map((c: any) => c.id),
+            chargeCategoryIds: catsRes.categories.map((c: any) => c.id),
           }));
           setSuppBillForm((prev) => ({ ...prev, chargeCategoryId: catsRes.categories[0].id }));
         }
@@ -1435,8 +1444,8 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 </div>
                 {can('manage_members') && (
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setModal('ADD_BLOCK')}>
-                      <Plus size={14} /> Add (+) Block
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setEditingBlockId(null); setEditingBlockName(''); setModal('ADD_BLOCK'); }}>
+                      <Plus size={14} /> Add / Edit Blocks
                     </button>
                     <button type="button" className="btn btn-primary btn-sm" onClick={() => setModal('ADD_MEMBER')}>
                       <Plus size={14} /> Enrol Member / Flat
@@ -1596,6 +1605,25 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                                   </button>
                                 </>
                               )}
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ background: 'transparent', color: '#ef4444', border: '1px solid #fca5a5', padding: '0.2rem 0.5rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                onClick={async () => {
+                                  if (window.confirm(`Are you sure you want to permanently delete resident member "${m.full_name}" (${m.normalized_flat_number})? This action cannot be undone.`)) {
+                                    try {
+                                      const delRes = await apiFetch(`/api/society/members/${m.id}`, { method: 'DELETE' });
+                                      notify(delRes.message || 'Member deleted successfully.');
+                                      refreshCurrentTab();
+                                    } catch (err: any) {
+                                      notify(err.message, 'error');
+                                    }
+                                  }
+                                }}
+                                title="Delete enrolled member"
+                              >
+                                <Trash2 size={12} /> Delete
+                              </button>
                             </div>
                           </td>
                         )}
@@ -1717,7 +1745,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         <tr key={b.id}>
                           <td><strong>{b.bill_number}</strong></td>
                           <td>
-                            <strong>{b.flat_number}</strong> — {b.member_name || 'Household'}
+                            <strong>{b.flat_number}</strong> — {b.member_name || b.primary_member_name || 'Resident'}
                           </td>
                           <td>
                             {b.bill_type === 'OPENING_BALANCE' || b.bill_number?.startsWith('OP-BAL-') ? (
@@ -3078,13 +3106,18 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   e.preventDefault();
                   const soc = settingsData.society;
                   const set = settingsData.settings || {};
+                  if (soc.contact_phone && !isValid10DigitPhone(soc.contact_phone)) {
+                    notify('Society contact phone must be a valid 10-digit mobile number starting with 6, 7, 8, or 9.', 'error');
+                    return;
+                  }
                   const res = await apiFetch('/api/society/settings', {
                     method: 'PUT',
                     body: {
                       name: soc.name,
                       address: soc.address,
                       contactEmail: soc.contact_email,
-                      contactPhone: soc.contact_phone,
+                      contactPhone: soc.contact_phone ? clean10DigitPhone(soc.contact_phone) : '',
+                      logoUrl: soc.logo_url || soc.logoUrl || '',
                       upiEnabled: Boolean(set.upi_enabled),
                       gpayUpiEnabled: Boolean(set.gpay_upi_enabled),
                       paytmEnabled: Boolean(set.paytm_enabled),
@@ -3124,22 +3157,101 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                     />
                   </div>
                   <div className="form-group">
-                    <label>Contact Email</label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <Lock size={13} color="var(--text-muted)" /> Contact Email (Locked)
+                    </label>
                     <input
                       type="email"
                       className="input"
+                      disabled
+                      readOnly
+                      style={{ backgroundColor: 'var(--bg-subtle, #f1f5f9)', color: 'var(--text-muted)', cursor: 'not-allowed' }}
                       value={settingsData.society.contact_email || ''}
-                      onChange={(e) => setSettingsData({ ...settingsData, society: { ...settingsData.society, contact_email: e.target.value } })}
+                      title="Primary society contact email is locked and managed by Platform Super Admin"
                     />
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                      🔒 Locked to change contact email (Super Admin Managed)
+                    </span>
                   </div>
                   <div className="form-group">
-                    <label>Contact Phone</label>
+                    <label>Contact Phone (10-Digit Mobile)</label>
                     <input
-                      type="text"
+                      type="tel"
+                      maxLength={10}
                       className="input"
+                      placeholder="e.g. 9876543210"
                       value={settingsData.society.contact_phone || ''}
                       onChange={(e) => setSettingsData({ ...settingsData, society: { ...settingsData.society, contact_phone: e.target.value } })}
                     />
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                      Must be a valid 10-digit mobile number
+                    </span>
+                  </div>
+                </div>
+
+                {/* Society Logo Upload Section */}
+                <div className="form-group" style={{ padding: '0.85rem', background: 'var(--bg-subtle, #f8fafc)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                    <ImageIcon size={15} color="var(--primary)" /> Society Logo (Upload by Society Admin)
+                  </label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
+                    {settingsData.society.logo_url ? (
+                      <div style={{ position: 'relative', display: 'inline-block' }}>
+                        <img
+                          src={settingsData.society.logo_url}
+                          alt="Society Logo"
+                          style={{ width: 72, height: 72, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--border)', background: '#fff', padding: 4 }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          style={{ position: 'absolute', top: -6, right: -6, background: '#ef4444', color: '#fff', borderRadius: '50%', width: 22, height: 22, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none' }}
+                          onClick={() => setSettingsData({ ...settingsData, society: { ...settingsData.society, logo_url: '' } })}
+                          title="Remove logo"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ width: 72, height: 72, borderRadius: 8, border: '2px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center', padding: 4 }}>
+                        No Logo
+                      </div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <label className="btn btn-secondary btn-sm" style={{ cursor: isUploadingLogo ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <Upload size={14} /> {isUploadingLogo ? 'Uploading...' : 'Upload Society Logo'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          style={{ display: 'none' }}
+                          disabled={isUploadingLogo}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            if (file.size > 2 * 1024 * 1024) {
+                              notify('Logo file size must be less than 2MB', 'error');
+                              return;
+                            }
+                            try {
+                              setIsUploadingLogo(true);
+                              const base64 = await uploadFileAsBase64(file);
+                              setSettingsData((prev: any) => ({
+                                ...prev,
+                                society: { ...prev.society, logo_url: base64 },
+                              }));
+                              notify('Logo loaded! Click "Save Settings" below to apply.');
+                            } catch (err: any) {
+                              notify(err.message || 'Failed to process logo file', 'error');
+                            } finally {
+                              setIsUploadingLogo(false);
+                            }
+                          }}
+                        />
+                      </label>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                        PNG, JPG, or SVG recommended (Max 2MB). Displays on portal header, resident dashboard, invoices & receipts.
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -3972,10 +4084,17 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                if (!isValid10DigitPhone(newMemberForm.phone)) {
+                  notify('Resident phone must be a valid 10-digit mobile number starting with 6, 7, 8, or 9.', 'error');
+                  return;
+                }
                 try {
                   const res = await apiFetch('/api/society/members', {
                     method: 'POST',
-                    body: newMemberForm,
+                    body: {
+                      ...newMemberForm,
+                      phone: clean10DigitPhone(newMemberForm.phone),
+                    },
                   });
                   notify(res.message);
                   setNewMemberForm({
@@ -4082,8 +4201,16 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   <input type="email" required className="input" value={newMemberForm.email} onChange={(e) => setNewMemberForm({ ...newMemberForm, email: e.target.value })} />
                 </div>
                 <div className="form-group">
-                  <label>Phone Number *</label>
-                  <input type="tel" required className="input" value={newMemberForm.phone} onChange={(e) => setNewMemberForm({ ...newMemberForm, phone: e.target.value })} />
+                  <label>Phone Number (10-Digit Mobile) *</label>
+                  <input
+                    type="tel"
+                    required
+                    maxLength={10}
+                    className="input"
+                    placeholder="e.g. 9876543210"
+                    value={newMemberForm.phone}
+                    onChange={(e) => setNewMemberForm({ ...newMemberForm, phone: e.target.value })}
+                  />
                 </div>
               </div>
               {newMemberForm.enrolmentMode === 'NEW_HOUSEHOLD' && (
@@ -4191,21 +4318,32 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
         </div>
       )}
 
-      {/* MODAL: ADD BLOCK */}
+      {/* MODAL: ADD / EDIT BLOCKS */}
       {modal === 'ADD_BLOCK' && (
         <div className="modal-backdrop" onClick={() => setModal('NONE')}>
-          <div className="modal-card" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h3>Add Apartment Block / Tower</h3>
+          <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <h3 style={{ margin: 0 }}>Apartment Blocks & Towers</h3>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setModal('NONE')}>
+                <X size={14} />
+              </button>
+            </div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0 0 1rem 0' }}>
+              Create new apartment blocks or edit & rename existing blocks. Renaming automatically updates all associated flats.
+            </p>
+
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                const trimmed = newBlockName.trim();
+                if (!trimmed) return;
                 try {
                   const res = await apiFetch('/api/society/blocks', {
                     method: 'POST',
-                    body: { name: newBlockName.trim() },
+                    body: { name: trimmed },
                   });
                   notify(res.message || 'Apartment block added successfully.');
-                  const addedName = (res.name || newBlockName).trim();
+                  const addedName = (res.name || trimmed);
                   const newBlockObj = { id: res.id || `blk-${Date.now()}`, name: addedName };
                   setMembersData((prev) => ({
                     ...prev,
@@ -4213,24 +4351,123 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   }));
                   setNewMemberForm((prev) => ({ ...prev, blockName: addedName }));
                   setNewBlockName('');
-                  const wasAddingMember = Boolean(newMemberForm.fullName || newMemberForm.email || newMemberForm.flatNumber);
-                  setModal(wasAddingMember ? 'ADD_MEMBER' : 'NONE');
                   await refreshCurrentTab();
                 } catch (err: any) {
                   notify(err.message, 'error');
                 }
               }}
-              style={{ display: 'grid', gap: '0.9rem', marginTop: '1rem' }}
+              style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }}
             >
-              <div className="form-group">
-                <label>Block / Tower Name *</label>
-                <input type="text" required className="input" placeholder="e.g., Block D" value={newBlockName} onChange={(e) => setNewBlockName(e.target.value)} />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Add Block</button>
-              </div>
+              <input
+                type="text"
+                required
+                className="input"
+                placeholder="New block name (e.g., Block D)"
+                value={newBlockName}
+                onChange={(e) => setNewBlockName(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button type="submit" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>
+                <Plus size={14} /> Add Block
+              </button>
             </form>
+
+            <div>
+              <h4 style={{ fontSize: '0.88rem', margin: '0 0 0.5rem 0' }}>Existing Blocks (Click Edit to Rename)</h4>
+              {(!membersData.blocks || membersData.blocks.length === 0) ? (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0.5rem 0' }}>
+                  No blocks configured yet. Add one above.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: '0.45rem', maxHeight: 240, overflowY: 'auto', paddingRight: 4 }}>
+                  {membersData.blocks.map((blk: any) => (
+                    <div
+                      key={blk.id || blk.name}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.45rem 0.65rem',
+                        background: 'var(--bg-subtle, #f8fafc)',
+                        borderRadius: 6,
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      {editingBlockId === blk.id ? (
+                        <div style={{ display: 'flex', gap: '0.4rem', flex: 1, alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            className="input"
+                            value={editingBlockName}
+                            onChange={(e) => setEditingBlockName(e.target.value)}
+                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            disabled={isUpdatingBlock || !editingBlockName.trim()}
+                            onClick={async () => {
+                              try {
+                                setIsUpdatingBlock(true);
+                                const res = await apiFetch(`/api/society/blocks/${blk.id}`, {
+                                  method: 'PUT',
+                                  body: { name: editingBlockName.trim() },
+                                });
+                                notify(res.message || 'Block updated successfully.');
+                                setEditingBlockId(null);
+                                await refreshCurrentTab();
+                              } catch (err: any) {
+                                notify(err.message, 'error');
+                              } finally {
+                                setIsUpdatingBlock(false);
+                              }
+                            }}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setEditingBlockId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <span style={{ fontWeight: 600, fontSize: '0.86rem' }}>{blk.name}</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '0.2rem 0.55rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                            onClick={() => {
+                              setEditingBlockId(blk.id);
+                              setEditingBlockName(blk.name);
+                            }}
+                          >
+                            <Edit2 size={12} /> Edit
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  const wasAddingMember = Boolean(newMemberForm.fullName || newMemberForm.email || newMemberForm.flatNumber);
+                  setModal(wasAddingMember ? 'ADD_MEMBER' : 'NONE');
+                }}
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -4349,16 +4586,25 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               onSubmit={async (e) => {
                 e.preventDefault();
                 try {
+                  const selectedCatIds = genBillForm.chargeCategoryIds.length > 0
+                    ? genBillForm.chargeCategoryIds
+                    : chargeCategories.map((c: any) => c.id);
+
                   const res = await apiFetch('/api/society/bills/generate', {
                     method: 'POST',
                     body: {
                       ...genBillForm,
+                      chargeCategoryIds: selectedCatIds,
                       householdId: genBillForm.householdId || null,
                     },
                   });
                   notify(res.message);
                   setModal('NONE');
-                  refreshCurrentTab();
+                  // Clear filters to ensure newly created bills are displayed immediately
+                  setBillMonthFilter('');
+                  setBillStatusFilter('');
+                  setBillSearch('');
+                  await refreshCurrentTab();
                 } catch (err: any) {
                   notify(err.message, 'error');
                 }
@@ -4390,7 +4636,27 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               </div>
 
               <div className="form-group">
-                <label>Select Charge Categories to Include on Bill *</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <label style={{ margin: 0 }}>Select Charge Categories to Include on Bill *</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '0.15rem 0.45rem', fontSize: '0.72rem' }}
+                      onClick={() => setGenBillForm((prev) => ({ ...prev, chargeCategoryIds: chargeCategories.map((c: any) => c.id) }))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '0.15rem 0.45rem', fontSize: '0.72rem' }}
+                      onClick={() => setGenBillForm((prev) => ({ ...prev, chargeCategoryIds: [] }))}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 200px), 1fr))', gap: '0.45rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8 }}>
                   {chargeCategories.map((c: any) => (
                     <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.84rem' }}>
@@ -4464,7 +4730,10 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   });
                   notify(res.message);
                   setModal('NONE');
-                  refreshCurrentTab();
+                  setBillMonthFilter('');
+                  setBillStatusFilter('');
+                  setBillSearch('');
+                  await refreshCurrentTab();
                 } catch (err: any) {
                   notify(err.message, 'error');
                 }
@@ -4601,10 +4870,17 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                if (!isValid10DigitPhone(newStaffForm.phone)) {
+                  notify('Staff phone number must be a valid 10-digit mobile number starting with 6, 7, 8, or 9.', 'error');
+                  return;
+                }
                 try {
                   const res = await apiFetch('/api/society/staff', {
                     method: 'POST',
-                    body: newStaffForm,
+                    body: {
+                      ...newStaffForm,
+                      phone: clean10DigitPhone(newStaffForm.phone),
+                    },
                   });
                   notify(res.message);
                   setModal('NONE');
@@ -4621,8 +4897,16 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   <input type="text" required className="input" value={newStaffForm.fullName} onChange={(e) => setNewStaffForm({ ...newStaffForm, fullName: e.target.value })} />
                 </div>
                 <div className="form-group">
-                  <label>Phone Number *</label>
-                  <input type="tel" required className="input" value={newStaffForm.phone} onChange={(e) => setNewStaffForm({ ...newStaffForm, phone: e.target.value })} />
+                  <label>Phone Number (10-Digit Mobile) *</label>
+                  <input
+                    type="tel"
+                    required
+                    maxLength={10}
+                    className="input"
+                    placeholder="e.g. 9876543210"
+                    value={newStaffForm.phone}
+                    onChange={(e) => setNewStaffForm({ ...newStaffForm, phone: e.target.value })}
+                  />
                 </div>
               </div>
               <div className="form-grid">

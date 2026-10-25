@@ -25,7 +25,7 @@ import {
   Eye,
   ExternalLink,
 } from 'lucide-react';
-import { apiFetch, uploadFileAsBase64, openRazorpayCheckout } from '../api.ts';
+import { apiFetch, uploadFileAsBase64, openRazorpayCheckout, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
 
 interface MemberPortalProps {
@@ -929,9 +929,16 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                 <form
                   onSubmit={async (e) => {
                     e.preventDefault();
+                    if (profileForm.phone && !isValid10DigitPhone(profileForm.phone)) {
+                      notify('Phone number must be a valid 10-digit mobile number starting with 6, 7, 8, or 9.', 'error');
+                      return;
+                    }
                     const res = await apiFetch('/api/auth/profile', {
                       method: 'PUT',
-                      body: profileForm,
+                      body: {
+                        ...profileForm,
+                        phone: profileForm.phone ? clean10DigitPhone(profileForm.phone) : '',
+                      },
                     });
                     notify(res.message);
                     loadMemberDashboard();
@@ -943,8 +950,15 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                     <input type="text" className="input" value={profileForm.fullName} onChange={(e) => setProfileForm({ ...profileForm, fullName: e.target.value })} />
                   </div>
                   <div className="form-group">
-                    <label>Phone Number</label>
-                    <input type="tel" className="input" value={profileForm.phone} onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })} />
+                    <label>Phone Number (10-Digit Mobile)</label>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      placeholder="e.g. 9876543210"
+                      className="input"
+                      value={profileForm.phone}
+                      onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                    />
                   </div>
                   <div className="form-group">
                     <label>Emergency Contact</label>
