@@ -40,8 +40,10 @@ $envCandidates = [
     __DIR__ . '/../../../hbuilds/current/.env',
 ];
 
+$loadedEnvFile = null;
 foreach ($envCandidates as $candidate) {
     if (file_exists($candidate) && is_readable($candidate)) {
+        $loadedEnvFile = $candidate;
         $lines = @file($candidate, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
         foreach ($lines as $line) {
             $trimmed = trim($line);
@@ -177,24 +179,28 @@ function get_auth_token($secret) {
 }
 
 $pdoError = null;
+$pdoAttempts = [];
+$activeDsn = null;
 
 function get_pdo($host, $port, $db, $user, $pass) {
     static $pdoInstance = null;
-    global $pdoError;
+    global $pdoError, $pdoAttempts, $activeDsn;
     if ($pdoInstance !== null) return $pdoInstance;
     if (empty($db) || empty($user)) {
         $pdoError = "Missing database name or user in configuration";
         return null;
     }
 
+    // Try localhost first (Hostinger standard Unix socket / local connection)
     $dsnCandidates = [
-        "mysql:host={$host};port={$port};dbname={$db};charset=utf8mb4",
         "mysql:host=localhost;dbname={$db};charset=utf8mb4",
+        "mysql:host={$host};port={$port};dbname={$db};charset=utf8mb4",
         "mysql:host=127.0.0.1;port=3306;dbname={$db};charset=utf8mb4",
         "mysql:unix_socket=/var/run/mysqld/mysqld.sock;dbname={$db};charset=utf8mb4",
         "mysql:unix_socket=/tmp/mysql.sock;dbname={$db};charset=utf8mb4",
     ];
 
+    $pdoAttempts = [];
     $lastErr = null;
     foreach ($dsnCandidates as $dsn) {
         try {
@@ -202,12 +208,16 @@ function get_pdo($host, $port, $db, $user, $pass) {
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_TIMEOUT => 3,
+                PDO::MYSQL_ATTR_MULTI_STATEMENTS => true,
             ]);
             $pdoInstance = $pdo;
             $pdoError = null;
+            $activeDsn = $dsn;
+            $pdoAttempts[] = ['dsn' => $dsn, 'status' => 'connected'];
             return $pdoInstance;
         } catch (\Throwable $e) {
             $lastErr = $e->getMessage();
+            $pdoAttempts[] = ['dsn' => $dsn, 'error' => $e->getMessage()];
         }
     }
 
@@ -222,15 +232,55 @@ $reqData = json_decode($body, true) ?: [];
 
 // 3.1 HEALTH CHECK
 if ($cleanPath === '/api/health') {
+    $tablesCount = 0;
+    if ($pdo) {
+        try {
+            $tablesCount = (int)$pdo->query("SELECT count(*) FROM information_schema.tables WHERE table_schema = " . $pdo->quote($mysqlDb))->fetchColumn();
+        } catch (\Throwable $e) {
+            $tablesCount = 0;
+        }
+    }
+
+    // Optional self-installer: auto-import mysql_schema.sql if ?setup=1 or (?init=1 and empty tables)
+    $schemaImported = null;
+    if ($pdo && (isset($_GET['setup']) || (isset($_GET['init']) && $tablesCount === 0))) {
+        $schemaCandidates = [
+            __DIR__ . '/../database/mysql_schema.sql',
+            __DIR__ . '/database/mysql_schema.sql',
+            __DIR__ . '/../../database/mysql_schema.sql',
+        ];
+        foreach ($schemaCandidates as $sf) {
+            if (file_exists($sf) && is_readable($sf)) {
+                $sql = @file_get_contents($sf);
+                if ($sql) {
+                    try {
+                        $pdo->exec($sql);
+                        $tablesCount = (int)$pdo->query("SELECT count(*) FROM information_schema.tables WHERE table_schema = " . $pdo->quote($mysqlDb))->fetchColumn();
+                        $schemaImported = "Successfully imported " . basename($sf) . ". Tables count is now {$tablesCount}.";
+                    } catch (\Throwable $e) {
+                        $schemaImported = "Import error: " . $e->getMessage();
+                    }
+                }
+                break;
+            }
+        }
+    }
+
     http_response_code(200);
     echo json_encode([
         'status' => 'ok',
         'backend' => 'SocietyOS Production Hostinger Gateway',
         'nodeRunning' => false,
         'mysqlConnected' => $pdo !== null,
+        'mysqlActiveDsn' => $activeDsn ?? null,
         'mysqlError' => $pdo ? null : $pdoError,
         'mysqlDatabase' => $mysqlDb,
-        'mysqlTables' => $pdo ? (int)$pdo->query("SELECT count(*) FROM information_schema.tables WHERE table_schema = " . $pdo->quote($mysqlDb))->fetchColumn() : 0,
+        'mysqlUser' => $mysqlUser,
+        'mysqlPasswordConfigured' => !empty($mysqlPass),
+        'envFileLoaded' => $loadedEnvFile ? basename($loadedEnvFile) : null,
+        'mysqlAttempts' => $pdoAttempts,
+        'mysqlTables' => $tablesCount,
+        'schemaImported' => $schemaImported,
         'runtime' => 'PHP 8.3 LiteSpeed (Native Hostinger Gateway)',
         'timestamp' => date('c')
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
