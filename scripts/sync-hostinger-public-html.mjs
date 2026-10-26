@@ -102,6 +102,20 @@ if (targetPublicHtml && fs.existsSync(distDir)) {
 # ============================================================================
 DirectoryIndex index.html index.php
 
+<IfModule mod_headers.c>
+  # Prevent caching of index.html so updates are immediate on reload
+  <FilesMatch "\\.(html|htm)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires 0
+  </FilesMatch>
+
+  # Cache hashed JS and CSS assets permanently
+  <FilesMatch "\\.(js|css)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /

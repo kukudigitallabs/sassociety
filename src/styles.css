@@ -583,6 +583,7 @@
     background: #ffffff !important;
     color: #0f172a !important;
     box-sizing: border-box !important;
+    overflow-x: hidden !important;
   }
 
   .printable-bill-table {
@@ -592,31 +593,52 @@
     border-collapse: collapse !important;
     table-layout: fixed !important;
     margin-bottom: 1rem;
-    font-size: 0.86rem;
+    font-size: 0.82rem;
+    box-sizing: border-box !important;
   }
 
   .printable-bill-table th {
     background: #0f172a !important;
     color: #ffffff !important;
     font-weight: 700 !important;
-    font-size: 0.78rem !important;
+    font-size: 0.76rem !important;
     text-transform: uppercase !important;
     letter-spacing: 0.04em !important;
     border: 1px solid #0f172a !important;
-    padding: 8px 10px !important;
+    padding: 7px 8px !important;
+    box-sizing: border-box !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
   }
 
   .printable-bill-table td {
     border: 1px solid #cbd5e1 !important;
-    padding: 8px 10px !important;
+    padding: 7px 8px !important;
     vertical-align: middle !important;
-    font-size: 0.84rem !important;
+    font-size: 0.82rem !important;
     color: #0f172a !important;
     background: #ffffff;
+    box-sizing: border-box !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
   }
 
   .printable-bill-table tr:nth-child(even) td {
     background: #f8fafc;
+  }
+
+  @media (max-width: 640px) {
+    .printable-bill-card {
+      padding: 0.75rem !important;
+      width: 100% !important;
+    }
+    .printable-bill-table {
+      font-size: 0.72rem !important;
+    }
+    .printable-bill-table th,
+    .printable-bill-table td {
+      padding: 5px 4px !important;
+    }
   }
 
   .toast-container {

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 
 const root = process.cwd();
-const artifactDir = '/Users/kuku/.gemini/antigravity/brain/2862068e-a20a-44b8-b990-eac8eb21b37d';
+const artifactDir = '/Users/kuku/.gemini/antigravity/brain/7a68040b-c614-45fd-ae0f-c793800d3d22';
 
 // Ensure builds are up to date
 console.log('[1/4] Running production Vite build and esbuild server compile...');
