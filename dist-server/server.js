@@ -25003,7 +25003,9 @@ async function handleApiRequest(ctx) {
           penaltyAmount = 0,
           creditAmount = 0,
           asDraft = false,
-          dueDate
+          dueDate,
+          overwriteExisting = false,
+          regenerate = false
         } = body;
         const m = Number(billingMonth);
         const y = Number(billingYear);
@@ -25058,14 +25060,31 @@ async function handleApiRequest(ctx) {
               }
             }
             if (existingRegular || hasDuplicateCharge) {
-              skippedDuplicates.push(hh.normalized_flat_number);
-              if (householdId) {
-                db.exec("ROLLBACK");
-                return sendJson(res, 409, {
-                  error: `Duplicate bill prevented: A regular bill or charge for Flat ${hh.normalized_flat_number} in ${m}/${y} already exists. Issue an adjustment or supplementary bill instead.`
-                });
+              if (overwriteExisting || regenerate) {
+                const existingRegularBill = existingRegular ? db.prepare("SELECT id, status FROM member_bills WHERE id = ?").get(existingRegular.id) : null;
+                if (existingRegularBill && ["PAID", "PARTIALLY_PAID"].includes(existingRegularBill.status)) {
+                  skippedDuplicates.push(`${hh.normalized_flat_number} (Already Paid)`);
+                  continue;
+                }
+                if (existingRegular) {
+                  db.prepare("DELETE FROM bill_items WHERE bill_id = ?").run(existingRegular.id);
+                  db.prepare("DELETE FROM bill_adjustments WHERE bill_id = ?").run(existingRegular.id);
+                  db.prepare("DELETE FROM member_bills WHERE id = ?").run(existingRegular.id);
+                } else {
+                  for (const cat of applicableCats) {
+                    db.prepare("DELETE FROM bill_items WHERE society_id = ? AND household_id = ? AND billing_month = ? AND billing_year = ? AND charge_category_id = ? AND is_adjustment = 0").run(societyId, hh.id, m, y, cat.id);
+                  }
+                }
+              } else {
+                skippedDuplicates.push(hh.normalized_flat_number);
+                if (householdId) {
+                  db.exec("ROLLBACK");
+                  return sendJson(res, 409, {
+                    error: `Duplicate bill prevented: A regular bill or charge for Flat ${hh.normalized_flat_number} in ${m}/${y} already exists. To update it, check 'Regenerate / Overwrite existing unpaid bills' or use 'Issue Adjustment / Supplementary Bill'.`
+                  });
+                }
+                continue;
               }
-              continue;
             }
             const prevRow = db.prepare(`
               SELECT COALESCE(SUM(balance_amount), 0) as prev
@@ -25163,6 +25182,19 @@ async function handleApiRequest(ctx) {
           }
           throw err;
         }
+      }
+      const deleteBillMatch = pathname.match(/^\/api\/society\/bills\/([^/]+)$/);
+      if (deleteBillMatch && method === "DELETE") {
+        const billId = deleteBillMatch[1];
+        const bill = db.prepare("SELECT * FROM member_bills WHERE id = ? AND society_id = ?").get(billId, societyId);
+        if (!bill) return sendJson(res, 404, { error: "Bill not found." });
+        if (bill.status === "PAID") {
+          return sendJson(res, 400, { error: "Cannot delete a paid bill. Issue a credit adjustment instead." });
+        }
+        db.prepare("DELETE FROM bill_items WHERE bill_id = ? AND society_id = ?").run(billId, societyId);
+        db.prepare("DELETE FROM bill_adjustments WHERE bill_id = ? AND society_id = ?").run(billId, societyId);
+        db.prepare("DELETE FROM member_bills WHERE id = ? AND society_id = ?").run(billId, societyId);
+        return sendJson(res, 200, { message: "Bill deleted successfully." });
       }
       const publishBillMatch = pathname.match(/^\/api\/society\/bills\/([^/]+)\/publish$/);
       if (publishBillMatch && method === "POST") {

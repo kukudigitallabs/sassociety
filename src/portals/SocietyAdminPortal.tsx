@@ -225,6 +225,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     creditAmount: 0,
     asDraft: false,
     dueDate: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-15`,
+    overwriteExisting: true,
   });
 
   // State for Double Warning Society Database Reset to Zero
@@ -1693,7 +1694,18 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       <button type="button" className="btn btn-secondary btn-sm" onClick={() => setModal('SUPPLEMENTARY_BILL')}>
                         <Plus size={14} /> Issue Adjustment / Supplementary Bill
                       </button>
-                      <button type="button" className="btn btn-primary btn-sm" onClick={() => setModal('GENERATE_BILLS')}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => {
+                          setGenBillForm((prev) => ({
+                            ...prev,
+                            chargeCategoryIds: chargeCategories.map((c: any) => c.id),
+                            overwriteExisting: true,
+                          }));
+                          setModal('GENERATE_BILLS');
+                        }}
+                      >
                         <Plus size={14} /> {t(lang, 'generateBills')}
                       </button>
                     </div>
@@ -1792,6 +1804,27 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                                   }}
                                 >
                                   Publish
+                                </button>
+                              )}
+                              {b.status !== 'PAID' && can('generate_bills') && (
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  style={{ background: 'transparent', color: '#ef4444', border: '1px solid #fca5a5', padding: '0.2rem 0.45rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                                  onClick={async () => {
+                                    if (window.confirm(`Delete bill #${b.bill_number} for Flat ${b.flat_number}?`)) {
+                                      try {
+                                        const res = await apiFetch(`/api/society/bills/${b.id}`, { method: 'DELETE' });
+                                        notify(res.message || 'Bill deleted.');
+                                        refreshCurrentTab();
+                                      } catch (err: any) {
+                                        notify(err.message, 'error');
+                                      }
+                                    }
+                                  }}
+                                  title="Delete unpaid bill"
+                                >
+                                  <Trash2 size={12} /> Delete
                                 </button>
                               )}
                             </div>
@@ -4596,6 +4629,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       ...genBillForm,
                       chargeCategoryIds: selectedCatIds,
                       householdId: genBillForm.householdId || null,
+                      overwriteExisting: Boolean(genBillForm.overwriteExisting),
                     },
                   });
                   notify(res.message);
@@ -4692,6 +4726,14 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               </div>
 
               <div style={{ display: 'grid', gap: '0.4rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.86rem', color: 'var(--primary)', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(genBillForm.overwriteExisting)}
+                    onChange={(e) => setGenBillForm({ ...genBillForm, overwriteExisting: e.target.checked })}
+                  />
+                  <span>Regenerate & overwrite existing unpaid bills for this period (Prevents duplicate blockage)</span>
+                </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.86rem' }}>
                   <input
                     type="checkbox"

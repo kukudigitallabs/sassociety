@@ -281,6 +281,22 @@ describe('SocietyOS SaaS — Comprehensive Acceptance Criteria Suite (Section 22
     });
     assert.equal(genDup.status, 409);
 
+    // Regenerating with overwriteExisting: true -> ALLOWED (updates/replaces existing unpaid bill)
+    const genOverwrite = await api('/api/society/bills/generate', {
+      method: 'POST',
+      token: societyAToken,
+      body: {
+        billingMonth: 10,
+        billingYear: 2026,
+        householdId: householdAId,
+        chargeCategoryIds: [maintCat.id, waterCat.id],
+        overwriteExisting: true,
+      },
+    });
+    assert.equal(genOverwrite.status, 201);
+    assert.equal(genOverwrite.data.createdCount, 1);
+    billAId = genOverwrite.data.createdBillIds[0];
+
     // Issuing an authorized Supplementary / Adjustment bill with audit reason -> ALLOWED
     const suppRes = await api('/api/society/bills/adjustment', {
       method: 'POST',

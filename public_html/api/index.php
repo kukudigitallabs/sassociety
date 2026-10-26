@@ -2530,8 +2530,8 @@ if (preg_match('#^/api/society/households/([^/]+)/opening-balance$#', $cleanPath
                     ]);
 
                     $pdo->prepare("
-                        INSERT INTO bill_items (id, society_id, bill_id, household_id, charge_category_id, category_name, billing_month, billing_year, description, amount, is_adjustment, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, 'Opening Balance Dues', ?, ?, ?, ?, 0, NOW(), NOW())
+                        INSERT INTO bill_items (id, society_id, bill_id, household_id, charge_category_id, category_name, billing_month, billing_year, description, amount, is_adjustment, created_at)
+                        VALUES (?, ?, ?, ?, ?, 'Opening Balance Dues', ?, ?, ?, ?, 0, NOW())
                     ")->execute([
                         uuid_v4(), $activeSocId, $billId, $hhId, $cat ? $cat['id'] : null, $mMonth, $mYear,
                         $notes ?: 'Prior Outstanding Dues / Ledger Opening Balance', $opBal
@@ -2679,8 +2679,8 @@ if ($cleanPath === '/api/society/bills/adjustment' && $method === 'POST') {
                 $pdo->prepare("
                     INSERT INTO bill_items (
                         id, society_id, bill_id, household_id, charge_category_id, category_name,
-                        billing_month, billing_year, description, amount, is_adjustment, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
+                        billing_month, billing_year, description, amount, is_adjustment, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
                 ")->execute([
                     uuid_v4(), $activeSocId, $billId, $hh['id'], $cat['id'], $cat['name'],
                     $month, $year, "{$cat['name']} Adjustment: {$reason}", $amt
@@ -2704,9 +2704,13 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
     $asDraft = !empty($reqData['asDraft']);
     $penaltyAmount = floatval($reqData['penaltyAmount'] ?? 0);
     $creditAmount = floatval($reqData['creditAmount'] ?? 0);
+    $overwriteExisting = !empty($reqData['overwriteExisting']) || !empty($reqData['regenerate']);
 
     $generatedCount = 0;
+    $createdBillIds = [];
     $skippedFlats = [];
+    $generationError = null;
+
     if ($pdo && !empty($activeSocId)) {
         try {
             $hhQuery = "SELECT * FROM households WHERE society_id = " . $pdo->quote($activeSocId) . " AND status != 'ARCHIVED'";
@@ -2714,6 +2718,12 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
                 $hhQuery .= " AND id = " . $pdo->quote($selectedHouseholdId);
             }
             $households = $pdo->query($hhQuery)->fetchAll() ?: [];
+
+            if (empty($households)) {
+                http_response_code(404);
+                echo json_encode(['error' => 'No active households found for bill generation. Please enrol members/flats first.']);
+                exit;
+            }
 
             $cats = [];
             if (!empty($categoryIds)) {
@@ -2734,11 +2744,30 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
 
             foreach ($households as $hh) {
                 // Check duplicate regular bill
-                $chkBill = $pdo->prepare("SELECT id FROM member_bills WHERE society_id = ? AND household_id = ? AND billing_month = ? AND billing_year = ? AND bill_type = 'REGULAR' AND status != 'CANCELLED' LIMIT 1");
+                $chkBill = $pdo->prepare("SELECT id, status FROM member_bills WHERE society_id = ? AND household_id = ? AND billing_month = ? AND billing_year = ? AND bill_type = 'REGULAR' AND status != 'CANCELLED' LIMIT 1");
                 $chkBill->execute([$activeSocId, $hh['id'], $month, $year]);
-                if ($chkBill->fetch()) {
-                    $skippedFlats[] = $hh['flat_number'];
-                    continue;
+                $existingBill = $chkBill->fetch();
+
+                if ($existingBill) {
+                    if (!$overwriteExisting) {
+                        $skippedFlats[] = $hh['flat_number'];
+                        if (!empty($selectedHouseholdId)) {
+                            http_response_code(409);
+                            echo json_encode([
+                                'error' => "Duplicate bill prevented: A regular bill for Flat {$hh['flat_number']} in {$month}/{$year} already exists. To update it, check 'Regenerate / Overwrite existing unpaid bills' or use 'Issue Adjustment / Supplementary Bill'."
+                            ]);
+                            exit;
+                        }
+                        continue;
+                    }
+                    if (in_array($existingBill['status'], ['PAID', 'PARTIALLY_PAID'])) {
+                        $skippedFlats[] = $hh['flat_number'] . " (Already Paid)";
+                        continue;
+                    }
+                    // Overwrite existing unpaid bill: delete old items and old bill record
+                    $pdo->prepare("DELETE FROM bill_items WHERE bill_id = ? AND society_id = ?")->execute([$existingBill['id'], $activeSocId]);
+                    $pdo->prepare("DELETE FROM bill_adjustments WHERE bill_id = ? AND society_id = ?")->execute([$existingBill['id'], $activeSocId]);
+                    $pdo->prepare("DELETE FROM member_bills WHERE id = ? AND society_id = ?")->execute([$existingBill['id'], $activeSocId]);
                 }
 
                 $billId = uuid_v4();
@@ -2750,8 +2779,8 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
                     $amt = floatval($cat['default_amount']);
                     $subtotalAmt += $amt;
                     $pdo->prepare("
-                        INSERT INTO bill_items (id, society_id, bill_id, household_id, charge_category_id, category_name, description, amount, is_adjustment, billing_month, billing_year, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NOW(), NOW())
+                        INSERT INTO bill_items (id, society_id, bill_id, household_id, charge_category_id, category_name, description, amount, is_adjustment, billing_month, billing_year, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NOW())
                     ")->execute([uuid_v4(), $activeSocId, $billId, $hh['id'], $cat['id'], $cat['name'], "{$cat['name']} ({$month}/{$year})", $amt, $month, $year]);
                 }
 
@@ -2782,25 +2811,67 @@ if ($cleanPath === '/api/society/bills/generate' && $method === 'POST') {
                     $totalAmt, $totalAmt, $dueDate, $auth['userId'] ?? null
                 ]);
 
+                $createdBillIds[] = $billId;
                 $generatedCount++;
             }
-        } catch (\Throwable $e) {}
+        } catch (\Throwable $e) {
+            $generationError = $e->getMessage();
+            error_log("Bill generation error: " . $generationError);
+        }
+    }
+
+    if (!empty($generationError) && $generatedCount === 0) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Database error generating bills: ' . $generationError]);
+        exit;
     }
 
     if ($generatedCount === 0 && !empty($skippedFlats)) {
-        http_response_code(200);
+        http_response_code(409);
         echo json_encode([
             'createdCount' => 0,
-            'message' => "0 new bills generated: Flat(s) " . implode(', ', $skippedFlats) . " already have a regular bill for {$month}/{$year}. Use 'Issue Adjustment / Supplementary Bill' to add extra charges."
+            'error' => "Duplicate bills prevented: Flat(s) " . implode(', ', $skippedFlats) . " already have regular bills for {$month}/{$year}. Check 'Regenerate / Overwrite existing unpaid bills' to update them, or use 'Issue Adjustment / Supplementary Bill'."
         ]);
         exit;
     }
 
-    http_response_code(200);
+    http_response_code(201);
     echo json_encode([
         'createdCount' => $generatedCount,
+        'createdBillIds' => $createdBillIds,
         'message' => "Generated {$generatedCount} bills for {$month}/{$year}." . (!empty($skippedFlats) ? " (" . count($skippedFlats) . " flats skipped: already billed)" : "")
     ]);
+    exit;
+}
+
+if (preg_match('#^/api/society/bills/([^/]+)$#', $cleanPath, $m) && $method === 'DELETE') {
+    $billId = $m[1];
+    if ($pdo && !empty($activeSocId)) {
+        try {
+            $bStmt = $pdo->prepare("SELECT id, status, bill_number FROM member_bills WHERE id = ? AND society_id = ? LIMIT 1");
+            $bStmt->execute([$billId, $activeSocId]);
+            $b = $bStmt->fetch();
+            if (!$b) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Bill not found.']);
+                exit;
+            }
+            if ($b['status'] === 'PAID') {
+                http_response_code(400);
+                echo json_encode(['error' => 'Cannot delete a paid bill. Issue a credit adjustment instead.']);
+                exit;
+            }
+            $pdo->prepare("DELETE FROM bill_items WHERE bill_id = ? AND society_id = ?")->execute([$billId, $activeSocId]);
+            $pdo->prepare("DELETE FROM bill_adjustments WHERE bill_id = ? AND society_id = ?")->execute([$billId, $activeSocId]);
+            $pdo->prepare("DELETE FROM member_bills WHERE id = ? AND society_id = ?")->execute([$billId, $activeSocId]);
+        } catch (\Throwable $e) {
+            http_response_code(500);
+            echo json_encode(['error' => 'Failed to delete bill: ' . $e->getMessage()]);
+            exit;
+        }
+    }
+    http_response_code(200);
+    echo json_encode(['message' => 'Bill deleted successfully.']);
     exit;
 }
 
