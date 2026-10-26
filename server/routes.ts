@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import Razorpay from 'razorpay';
 import {
   db,
@@ -78,6 +79,92 @@ export function clean10DigitPhone(phone?: string | null): string {
   const digits = String(phone).replace(/\D/g, '');
   if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
   return digits.slice(-10);
+}
+
+/**
+ * Dispatches an automated HMAC SHA-256 signed webhook notification to the configured
+ * platform webhook URL for instant order and payment updates.
+ */
+export async function dispatchPlatformWebhook(
+  event: string,
+  payload: Record<string, any>
+): Promise<{ success: boolean; statusCode?: number; error?: string; responseBody?: string; durationMs?: number }> {
+  const start = Date.now();
+  try {
+    const platform = db
+      .prepare('SELECT webhook_url, webhook_secret, webhook_enabled FROM platform_settings LIMIT 1')
+      .get() as { webhook_url?: string; webhook_secret?: string; webhook_enabled?: number } | undefined;
+
+    if (!platform?.webhook_enabled || !platform?.webhook_url) {
+      return { success: false, error: 'Webhooks are disabled or no target URL is configured.' };
+    }
+
+    const url = platform.webhook_url.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return { success: false, error: 'Invalid webhook URL (must begin with http:// or https://).' };
+    }
+
+    const timestamp = new Date().toISOString();
+    const eventId = `evt_${uuid().replace(/-/g, '').slice(0, 16)}`;
+    const fullPayload = {
+      id: eventId,
+      event,
+      timestamp,
+      data: payload,
+    };
+    const rawBody = JSON.stringify(fullPayload);
+
+    const secret = (platform.webhook_secret || '').trim() || 'societyos_webhook_secret';
+    const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-SocietyOS-Signature': signature,
+        'X-SocietyOS-Event': event,
+        'X-SocietyOS-Delivery': eventId,
+        'User-Agent': 'SocietyOS-Webhook-Dispatcher/2.0',
+      },
+      body: rawBody,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const durationMs = Date.now() - start;
+    const text = await res.text().catch(() => '');
+    const isSuccess = res.ok ? 1 : 0;
+
+    try {
+      db.prepare(`
+        INSERT INTO webhook_logs (id, event, url, status_code, response_body, success, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(eventId, event, url, res.status, text.slice(0, 1000), isSuccess, rawBody);
+    } catch (e) {
+      console.warn('Failed to insert webhook_log:', e);
+    }
+
+    return {
+      success: res.ok,
+      statusCode: res.status,
+      responseBody: text.slice(0, 500),
+      durationMs,
+    };
+  } catch (err: any) {
+    const durationMs = Date.now() - start;
+    const errMsg = err?.message || 'Webhook network dispatch failed';
+    try {
+      const errEventId = `evt_${uuid().replace(/-/g, '').slice(0, 16)}`;
+      db.prepare(`
+        INSERT INTO webhook_logs (id, event, url, status_code, response_body, success, payload)
+        VALUES (?, ?, ?, 0, ?, 0, ?)
+      `).run(errEventId, event, 'FAILED', errMsg, JSON.stringify(payload));
+    } catch {}
+    return { success: false, error: errMsg, durationMs };
+  }
 }
 
 export interface RequestContext {
@@ -967,7 +1054,8 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
       const platform = db.prepare('SELECT * FROM platform_settings LIMIT 1').get() as Record<string, any> | undefined;
       const soc = db.prepare('SELECT * FROM societies WHERE id = ?').get(subPayment.society_id) as Record<string, any> | undefined;
 
-      const autoApprove = Boolean(platform?.auto_approve_paid_societies);
+      const autoVerifyEnabled = Boolean(platform?.auto_verify_upi_utr ?? 1);
+      const autoApprove = (Boolean(platform?.auto_approve_paid_societies) || autoVerifyEnabled) && ref.length >= 6;
       const nowIso = new Date().toISOString();
       const endsIso = new Date(Date.now() + Number(plan?.duration_days || 30) * 86400_000).toISOString();
       const graceEndsIso = new Date(
@@ -1026,6 +1114,22 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
 
         db.exec('COMMIT');
         syncToMysqlAfterWrite();
+
+        // Automated payment success notifications via webhooks for instant order updates
+        dispatchPlatformWebhook(autoApprove ? 'payment.success' : 'payment.pending', {
+          invoiceNumber: subPayment.invoice_number,
+          orderId: subPayment.gateway_order_id,
+          paymentId: ref,
+          utr: ref,
+          amount: subPayment.total_amount,
+          taxAmount: subPayment.tax_amount,
+          societyId: subPayment.society_id,
+          societyName: soc?.name,
+          planName: plan?.name,
+          status: autoApprove ? 'PAID' : 'PENDING_APPROVAL',
+          verifiedAt: autoApprove ? nowIso : null,
+          paymentMethod: 'DIRECT_UPI',
+        }).catch((e) => console.warn('Automated webhook failed:', e));
 
         return sendJson(res, 200, {
           success: true,
@@ -2040,6 +2144,12 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
         const logoUrl = body.logoUrl ?? body.logo_url;
         const darkLogoUrl = body.darkLogoUrl ?? body.dark_logo_url;
 
+        // Automated Webhooks & Direct UPI Auto-Verification
+        const webhookUrl = body.webhookUrl ?? body.webhook_url;
+        const webhookSecret = body.webhookSecret ?? body.webhook_secret;
+        const webhookEnabled = body.webhookEnabled ?? body.webhook_enabled;
+        const autoVerifyUpiUtr = body.autoVerifyUpiUtr ?? body.auto_verify_upi_utr;
+
         db.prepare(`
           UPDATE platform_settings
           SET platform_name = COALESCE(?, platform_name),
@@ -2090,6 +2200,10 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
               custom_header_scripts = COALESCE(?, custom_header_scripts),
               logo_url = COALESCE(?, logo_url),
               dark_logo_url = COALESCE(?, dark_logo_url),
+              webhook_url = COALESCE(?, webhook_url),
+              webhook_secret = COALESCE(?, webhook_secret),
+              webhook_enabled = COALESCE(?, webhook_enabled),
+              auto_verify_upi_utr = COALESCE(?, auto_verify_upi_utr),
               updated_at = datetime('now')
           WHERE id = 'default'
         `).run(
@@ -2140,7 +2254,11 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
           googleAnalyticsId !== undefined ? googleAnalyticsId : null,
           customHeaderScripts !== undefined ? customHeaderScripts : null,
           logoUrl !== undefined ? logoUrl : null,
-          darkLogoUrl !== undefined ? darkLogoUrl : null
+          darkLogoUrl !== undefined ? darkLogoUrl : null,
+          webhookUrl !== undefined ? webhookUrl : null,
+          webhookSecret !== undefined ? webhookSecret : null,
+          webhookEnabled !== undefined ? (webhookEnabled ? 1 : 0) : null,
+          autoVerifyUpiUtr !== undefined ? (autoVerifyUpiUtr ? 1 : 0) : null
         );
         syncToMysqlAfterWrite();
         logAudit({
@@ -2458,6 +2576,124 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
         });
 
         return sendJson(res, 200, { message: 'Refund issue details updated successfully.' });
+      }
+
+      // Webhook Testing Endpoint
+      if (pathname === '/api/super-admin/webhooks/test' && method === 'POST') {
+        const { webhookUrl, webhookSecret } = body;
+        const targetUrl = (webhookUrl || '').trim();
+        const platform = db.prepare('SELECT webhook_url, webhook_secret FROM platform_settings LIMIT 1').get() as Record<string, any> | undefined;
+        const effectiveUrl = targetUrl || platform?.webhook_url;
+        if (!effectiveUrl) {
+          return sendJson(res, 400, { error: 'Please enter a target Webhook URL to test.' });
+        }
+        const effectiveSecret = (webhookSecret !== undefined ? webhookSecret : platform?.webhook_secret) || 'societyos_secret';
+
+        const start = Date.now();
+        const testPayload = {
+          test: true,
+          event: 'payment.success',
+          message: 'SocietyOS Automated Webhook Test Ping — Delivery Verified!',
+          sampleOrder: {
+            invoiceNumber: 'SUB-INV-2026-TEST',
+            societyName: 'Green Valley Residency',
+            amount: 2499.00,
+            currency: 'INR',
+            paymentMethod: 'DIRECT_UPI',
+            utr: '425188992011',
+            status: 'PAID',
+            verifiedAt: new Date().toISOString(),
+          },
+        };
+        const rawBody = JSON.stringify({
+          id: `evt_test_${uuid().replace(/-/g, '').slice(0, 12)}`,
+          event: 'payment.success',
+          timestamp: new Date().toISOString(),
+          data: testPayload,
+        });
+        const signature = crypto.createHmac('sha256', effectiveSecret).update(rawBody).digest('hex');
+
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 7000);
+          const response = await fetch(effectiveUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-SocietyOS-Signature': signature,
+              'X-SocietyOS-Event': 'payment.success',
+              'User-Agent': 'SocietyOS-Webhook-Dispatcher/2.0',
+            },
+            body: rawBody,
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          const responseText = await response.text().catch(() => '');
+          const durationMs = Date.now() - start;
+
+          try {
+            db.prepare(`
+              INSERT INTO webhook_logs (id, event, url, status_code, response_body, success, payload)
+              VALUES (?, 'payment.test', ?, ?, ?, ?, ?)
+            `).run(uuid(), effectiveUrl, response.status, responseText.slice(0, 1000), response.ok ? 1 : 0, rawBody);
+          } catch {}
+
+          return sendJson(res, 200, {
+            success: response.ok,
+            statusCode: response.status,
+            statusText: response.statusText,
+            responseBody: responseText.slice(0, 500),
+            durationMs,
+            message: response.ok
+              ? `Webhook test succeeded! Server responded with HTTP ${response.status} (${durationMs}ms).`
+              : `Webhook server responded with HTTP ${response.status}: ${responseText.slice(0, 100)}`,
+          });
+        } catch (err: any) {
+          const durationMs = Date.now() - start;
+          return sendJson(res, 200, {
+            success: false,
+            statusCode: 0,
+            durationMs,
+            error: err?.message || 'Could not connect to webhook URL',
+            message: `Delivery failed: ${err?.message || 'Connection error'}. Please verify your server URL and network accessibility.`,
+          });
+        }
+      }
+
+      // Webhook Delivery Logs
+      if (pathname === '/api/super-admin/webhooks/logs' && method === 'GET') {
+        const logs = db.prepare('SELECT * FROM webhook_logs ORDER BY created_at DESC LIMIT 30').all();
+        return sendJson(res, 200, { logs });
+      }
+
+      // Resend Webhook for Specific Order
+      const resendWebhookMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/resend-webhook$/);
+      if (resendWebhookMatch && method === 'POST') {
+        const subPayId = resendWebhookMatch[1];
+        const sp = db.prepare('SELECT sp.*, s.name as society_name FROM subscription_payments sp JOIN societies s ON s.id = sp.society_id WHERE sp.id = ?').get(subPayId) as Record<string, any> | undefined;
+        if (!sp) return sendJson(res, 404, { error: 'Subscription payment not found.' });
+
+        const outcome = await dispatchPlatformWebhook(sp.status === 'PAID' ? 'payment.success' : 'payment.status_update', {
+          invoiceNumber: sp.invoice_number,
+          orderId: sp.gateway_order_id,
+          paymentId: sp.gateway_payment_id,
+          utr: sp.gateway_payment_id,
+          amount: sp.total_amount,
+          taxAmount: sp.tax_amount,
+          societyId: sp.society_id,
+          societyName: sp.society_name,
+          status: sp.status,
+          verifiedAt: sp.paid_at || new Date().toISOString(),
+          paymentMethod: sp.payment_gateway || 'DIRECT_UPI',
+        });
+
+        return sendJson(res, 200, {
+          success: outcome.success,
+          statusCode: outcome.statusCode,
+          message: outcome.success
+            ? `Webhook delivered successfully (HTTP ${outcome.statusCode})!`
+            : `Webhook delivery failed: ${outcome.error || 'Check webhook URL in settings'}`,
+        });
       }
     }
 

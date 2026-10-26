@@ -714,6 +714,11 @@ export function initDatabase(): void {
     "ALTER TABLE households ADD COLUMN opening_balance REAL NOT NULL DEFAULT 0",
     "ALTER TABLE households ADD COLUMN opening_balance_notes TEXT NULL",
     "ALTER TABLE households ADD COLUMN opening_balance_date TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN webhook_url TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN webhook_secret TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN webhook_enabled INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE platform_settings ADD COLUMN auto_verify_upi_utr INTEGER NOT NULL DEFAULT 1",
+    "CREATE TABLE IF NOT EXISTS webhook_logs (id TEXT PRIMARY KEY, event TEXT NOT NULL, url TEXT NOT NULL, status_code INTEGER NULL, response_body TEXT NULL, success INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))",
   ];
   for (const sql of safeAlterColumns) {
     try {

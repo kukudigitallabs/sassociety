@@ -517,6 +517,10 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
 export function printInvoiceDocument(data: PrintableBillData) {
   const html = generateInvoiceHtml(data);
 
+  // Guarantee that if the browser delegates printing to the parent window,
+  // all background pages, sidebars, tables, and topbars are 100% hidden.
+  document.body.classList.add('print-bill-only');
+
   try {
     let printFrame = document.getElementById('society-print-iframe') as HTMLIFrameElement | null;
     if (printFrame) {
@@ -524,41 +528,48 @@ export function printInvoiceDocument(data: PrintableBillData) {
     }
     printFrame = document.createElement('iframe');
     printFrame.id = 'society-print-iframe';
+    printFrame.setAttribute('aria-hidden', 'true');
     printFrame.style.position = 'fixed';
-    printFrame.style.right = '0';
-    printFrame.style.bottom = '0';
-    printFrame.style.width = '0';
-    printFrame.style.height = '0';
+    printFrame.style.top = '-10000px';
+    printFrame.style.left = '-10000px';
+    printFrame.style.width = '840px';
+    printFrame.style.height = '1180px';
     printFrame.style.border = '0';
-    printFrame.style.opacity = '0';
-    printFrame.style.pointerEvents = 'none';
+    printFrame.style.visibility = 'visible';
     document.body.appendChild(printFrame);
 
-    const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
-    if (frameDoc && printFrame.contentWindow) {
+    const frameWindow = printFrame.contentWindow;
+    const frameDoc = frameWindow?.document;
+    if (frameWindow && frameDoc) {
       frameDoc.open();
       frameDoc.write(html);
       frameDoc.close();
 
       setTimeout(() => {
         try {
-          printFrame?.contentWindow?.focus();
-          printFrame?.contentWindow?.print();
+          frameWindow.focus();
+          frameWindow.print();
         } catch {
-          document.body.classList.add('print-bill-only');
           window.print();
-          setTimeout(() => document.body.classList.remove('print-bill-only'), 1200);
+        } finally {
+          setTimeout(() => {
+            document.body.classList.remove('print-bill-only');
+            try {
+              printFrame?.remove();
+            } catch {
+              // Ignore cleanup error
+            }
+          }, 1500);
         }
-      }, 400);
+      }, 350);
       return;
     }
   } catch (err) {
     console.warn('Iframe print failed, falling back to window.print()', err);
   }
 
-  document.body.classList.add('print-bill-only');
   window.print();
   setTimeout(() => {
     document.body.classList.remove('print-bill-only');
-  }, 1200);
+  }, 1500);
 }

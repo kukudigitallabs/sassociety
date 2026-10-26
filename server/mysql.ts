@@ -40,6 +40,7 @@ export const MYSQL_TABLES = [
   'ledger_entries',
   'notifications',
   'audit_logs',
+  'webhook_logs',
 ] as const;
 
 let mysqlPool: any = null;

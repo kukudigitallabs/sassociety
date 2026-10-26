@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS `platform_settings` (
   `custom_header_scripts` TEXT NULL,
   `logo_url` LONGTEXT NULL,
   `dark_logo_url` LONGTEXT NULL,
+  `webhook_url` TEXT NULL,
+  `webhook_secret` TEXT NULL,
+  `webhook_enabled` INT NOT NULL DEFAULT 1,
+  `auto_verify_upi_utr` INT NOT NULL DEFAULT 1,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1169,6 +1173,21 @@ INSERT IGNORE INTO `audit_logs` (`id`, `society_id`, `actor_user_id`, `actor_rol
 INSERT IGNORE INTO `audit_logs` (`id`, `society_id`, `actor_user_id`, `actor_role`, `action`, `entity_type`, `entity_id`, `details`, `ip_address`, `created_at`) VALUES ('914296f8-0a6f-4f11-9862-0280c717933a', '481217da-9f91-4d17-86a6-dc4f17725a75', '94e7a8da-927d-49da-b02f-f6e661a7c790', 'SOCIETY_ADMIN', 'SOCIETY_REGISTERED', 'SOCIETY', '481217da-9f91-4d17-86a6-dc4f17725a75', '{"societyName":"kuku homes","planCode":"MONTHLY_STARTER","useTrial":false}', '192.168.65.1', '2026-10-21 21:38:32');
 INSERT IGNORE INTO `audit_logs` (`id`, `society_id`, `actor_user_id`, `actor_role`, `action`, `entity_type`, `entity_id`, `details`, `ip_address`, `created_at`) VALUES ('a60a8800-2f79-4fcd-9755-2dd9c5148fed', 'soc-green-valley', 'user-admin-green-valley', 'SOCIETY_ADMIN', 'RESET_TO_ZERO', 'SOCIETY', 'soc-green-valley', 'Society database reset to zero by admin', NULL, '2026-10-23 20:10:40');
 INSERT IGNORE INTO `audit_logs` (`id`, `society_id`, `actor_user_id`, `actor_role`, `action`, `entity_type`, `entity_id`, `details`, `ip_address`, `created_at`) VALUES ('cff63c66-ff30-432d-bd20-50341fb5718e', NULL, 'user-super-admin', 'SUPER_ADMIN', 'CREATED_SUBSCRIPTION_PLAN', 'SUBSCRIPTION_PLAN', 'd5019f2b-8855-4aec-abff-675c3f050f09', '{"code":"Startup Plan","name":"Startup Plan","priceAmount":13}', NULL, '2026-10-24 03:54:40');
+
+-- --------------------------------------------------------
+-- Table structure for table `webhook_logs`
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `webhook_logs` (
+  `id` VARCHAR(64) NOT NULL,
+  `event` VARCHAR(64) NOT NULL,
+  `url` TEXT NOT NULL,
+  `status_code` INT NULL,
+  `response_body` TEXT NULL,
+  `success` INT NOT NULL DEFAULT 0,
+  `payload` LONGTEXT NOT NULL,
+  `created_at` VARCHAR(64) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 INSERT IGNORE INTO `audit_logs` (`id`, `society_id`, `actor_user_id`, `actor_role`, `action`, `entity_type`, `entity_id`, `details`, `ip_address`, `created_at`) VALUES ('4e8c3ef6-c003-4a55-86a3-0d66e497bd81', NULL, 'user-super-admin', 'SUPER_ADMIN', 'UPDATED_PLATFORM_SETTINGS', 'PLATFORM_SETTINGS', 'default', '{}', NULL, '2026-10-24 03:55:29');
 INSERT IGNORE INTO `audit_logs` (`id`, `society_id`, `actor_user_id`, `actor_role`, `action`, `entity_type`, `entity_id`, `details`, `ip_address`, `created_at`) VALUES ('97fd549a-e214-4715-a48f-575cf9f820cd', NULL, 'user-super-admin', 'SUPER_ADMIN', 'UPDATED_PLATFORM_SETTINGS', 'PLATFORM_SETTINGS', 'default', '{}', NULL, '2026-10-24 03:56:25');
 INSERT IGNORE INTO `audit_logs` (`id`, `society_id`, `actor_user_id`, `actor_role`, `action`, `entity_type`, `entity_id`, `details`, `ip_address`, `created_at`) VALUES ('b0eee27b-c4db-4d7d-938d-57d719fb6274', '1869561b-7481-4c79-90e6-5986a24fcfe6', 'user-super-admin', 'SUPER_ADMIN', 'SUPER_ADMIN_CREATED_SOCIETY', 'SOCIETY', '1869561b-7481-4c79-90e6-5986a24fcfe6', '{"societyName":"Ram Homes","email":"ram@gmail.com"}', NULL, '2026-10-24 03:57:40');

@@ -38,6 +38,10 @@ import {
   RotateCcw,
   Receipt,
   Printer,
+  Send,
+  Smartphone,
+  Zap,
+  Radio,
 } from 'lucide-react';
 import { apiFetch, downloadCsv, uploadFileAsBase64, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
@@ -139,6 +143,64 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
     autoApproveAfterPayment: true,
   });
   const [settingsForm, setSettingsForm] = useState<any>({});
+  const [testQrModalOpen, setTestQrModalOpen] = useState(false);
+  const [testQrAmount, setTestQrAmount] = useState<number>(2499);
+  const [testQrNote, setTestQrNote] = useState<string>('Society Subscription Payment');
+  const [webhookTesting, setWebhookTesting] = useState(false);
+  const [webhookTestResult, setWebhookTestResult] = useState<any | null>(null);
+  const [webhookLogs, setWebhookLogs] = useState<any[]>([]);
+  const [showWebhookLogsModal, setShowWebhookLogsModal] = useState(false);
+  const [resendingWebhookId, setResendingWebhookId] = useState<string | null>(null);
+  const [paymentGatewayFilter, setPaymentGatewayFilter] = useState<'ALL' | 'UPI' | 'BANK_TRANSFER'>('ALL');
+
+  async function handleTestWebhook() {
+    setWebhookTesting(true);
+    setWebhookTestResult(null);
+    try {
+      const res = await apiFetch<any>('/api/super-admin/webhooks/test', {
+        method: 'POST',
+        body: {
+          webhookUrl: settingsForm.webhook_url,
+          webhookSecret: settingsForm.webhook_secret,
+        },
+      });
+      setWebhookTestResult(res);
+      if (res.success) {
+        notify(res.message || 'Webhook test succeeded!', 'success');
+      } else {
+        notify(res.message || 'Webhook test delivery failed', 'error');
+      }
+    } catch (err: any) {
+      setWebhookTestResult({ success: false, error: err.message, message: err.message });
+      notify(err.message, 'error');
+    } finally {
+      setWebhookTesting(false);
+    }
+  }
+
+  async function handleOpenWebhookLogs() {
+    setShowWebhookLogsModal(true);
+    try {
+      const res = await apiFetch<any>('/api/super-admin/webhooks/logs');
+      setWebhookLogs(res.logs || []);
+    } catch (err: any) {
+      notify(err.message, 'error');
+    }
+  }
+
+  async function handleResendWebhook(paymentId: string) {
+    setResendingWebhookId(paymentId);
+    try {
+      const res = await apiFetch<any>(`/api/super-admin/subscription-payments/${paymentId}/resend-webhook`, {
+        method: 'POST',
+      });
+      notify(res.message, res.success ? 'success' : 'error');
+    } catch (err: any) {
+      notify(err.message, 'error');
+    } finally {
+      setResendingWebhookId(null);
+    }
+  }
 
   async function loadDashboard(quiet = false) {
     if (!quiet) setLoading(true);
@@ -432,6 +494,165 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                   <span className="kpi-label">Monthly / Annual Revenue</span>
                   <span className="kpi-value">{formatCurrency(kpis.monthlyRevenueSummary)}</span>
                   <span className="kpi-sub">Annual: {formatCurrency(kpis.annualRevenueSummary)}</span>
+                </div>
+              </div>
+
+              {/* Incoming Direct UPI & Bank Payments Live Tracker */}
+              <div className="card" style={{ marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.85rem' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <QrCode size={18} color="var(--primary)" />
+                      <h3 style={{ margin: 0 }}>Incoming Direct UPI & Bank Payments Tracker</h3>
+                      <span className="badge badge-success" style={{ fontSize: '0.7rem' }}>Real-Time</span>
+                    </div>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '3px 0 0 0' }}>
+                      Track real-time subscription transactions received directly via Google Pay, PhonePe, Paytm, BHIM, and NEFT/RTGS with automated verification.
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setTestQrModalOpen(true)}
+                    >
+                      <QrCode size={13} /> Test Scannable QR Card
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => setActiveTab('PAYMENTS')}
+                    >
+                      View All in Payments Hub &rarr;
+                    </button>
+                  </div>
+                </div>
+
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Invoice / Order #</th>
+                        <th>Society / Payer</th>
+                        <th>Plan & Amount</th>
+                        <th>Gateway & Mode</th>
+                        <th>UTR / Bank Ref</th>
+                        <th>Verification Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {subscriptionPayments.slice(0, 5).map((sp: any) => {
+                        const isAutoVerified = sp.status === 'PAID' && sp.payment_reference && sp.payment_reference.length >= 6;
+                        const isUpi = sp.payment_method === 'UPI' || sp.payment_method === 'DIRECT_UPI';
+                        return (
+                          <tr key={sp.id}>
+                            <td>
+                              <strong>#{sp.invoice_number || sp.id.slice(0, 8)}</strong>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                {(sp.created_at || '').slice(0, 10)}
+                              </div>
+                            </td>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{sp.society_name || 'Society Account'}</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{sp.admin_name || sp.contact_email}</div>
+                            </td>
+                            <td>
+                              <div style={{ fontWeight: 700, color: 'var(--primary)' }}>
+                                {formatCurrency(sp.total_amount || sp.amount)}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{sp.plan_name || 'Subscription'}</div>
+                            </td>
+                            <td>
+                              <span
+                                className="badge"
+                                style={{
+                                  background: isUpi ? 'rgba(16, 185, 129, 0.12)' : 'rgba(59, 130, 246, 0.12)',
+                                  color: isUpi ? '#059669' : '#2563eb',
+                                  border: `1px solid ${isUpi ? '#10b981' : '#3b82f6'}`,
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {isUpi ? 'DIRECT UPI (GPay/PhonePe/Paytm)' : 'BANK TRANSFER (NEFT/IMPS)'}
+                              </span>
+                            </td>
+                            <td>
+                              {sp.payment_reference ? (
+                                <code style={{ fontSize: '0.75rem', background: '#f1f5f9', padding: '2px 5px', borderRadius: 4, fontWeight: 700 }}>
+                                  {sp.payment_reference}
+                                </code>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>No UTR logged</span>
+                              )}
+                            </td>
+                            <td>
+                              {sp.status === 'PAID' ? (
+                                <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                  <CheckCircle size={11} /> {isAutoVerified ? 'AUTO-VERIFIED (REAL-TIME)' : 'PAID & VERIFIED'}
+                                </span>
+                              ) : sp.status === 'REFUNDED' ? (
+                                <span className="badge badge-secondary" style={{ background: '#f5f3ff', color: '#7c3aed', border: '1px solid #7c3aed' }}>
+                                  REFUNDED
+                                </span>
+                              ) : (
+                                <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                  <Clock size={11} /> PENDING UTR VERIFICATION
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                                {sp.status !== 'PAID' && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-sm"
+                                    style={{ padding: '3px 8px', fontSize: '0.74rem' }}
+                                    onClick={() => handleMarkPaid(sp)}
+                                  >
+                                    Verify & Activate
+                                  </button>
+                                )}
+                                {sp.payment_proof_url && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ padding: '3px 8px', fontSize: '0.74rem' }}
+                                    onClick={() => setSelectedReceipt({
+                                      url: sp.payment_proof_url,
+                                      societyName: sp.society_name,
+                                      invoiceNo: sp.invoice_number,
+                                      amount: sp.total_amount,
+                                      utr: sp.payment_reference,
+                                    })}
+                                    title="View Resident Receipt / Proof"
+                                  >
+                                    Proof
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ padding: '3px 8px', fontSize: '0.74rem' }}
+                                  onClick={() => setViewingSubInvoice(sp)}
+                                  title="View Tax Invoice"
+                                >
+                                  Invoice
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {subscriptionPayments.length === 0 && (
+                        <tr>
+                          <td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
+                            No incoming transactions logged yet. All incoming payments via Direct UPI or Bank Transfer will appear here in real-time.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -740,6 +961,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
               if (paymentStatusFilter === 'REFUNDED' && p.status !== 'REFUNDED') return false;
               if (paymentStatusFilter === 'FAILED' && p.status !== 'FAILED') return false;
 
+              if (paymentGatewayFilter === 'UPI' && p.payment_gateway !== 'UPI') return false;
+              if (paymentGatewayFilter === 'BANK_TRANSFER' && p.payment_gateway !== 'BANK_TRANSFER') return false;
+
               if (paymentSearch.trim()) {
                 const q = paymentSearch.toLowerCase().trim();
                 const matchSoc = (p.society_name || '').toLowerCase().includes(q);
@@ -753,17 +977,52 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
 
             return (
               <div className="card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1.25rem' }}>
                   <div>
-                    <h3 style={{ margin: 0 }}>Society Subscription Invoices & Payment Verifications</h3>
-                    <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '0.25rem 0 0' }}>
-                      Audit invoices, verify manual UPI transfers, issue refunds, mark unpaid/paid, or inspect credit notes.
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: 2 }}>
+                      <h3 style={{ margin: 0 }}>Incoming UPI & Bank Payments Dashboard</h3>
+                      <span className="badge badge-success" style={{ fontSize: '0.7rem' }}>Live Tracker</span>
+                    </div>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
+                      Real-time tracking of incoming website transactions via Direct UPI (Google Pay, PhonePe, Paytm) & Bank Transfer without a merchant account.
                     </p>
                   </div>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={handleManualRefresh} disabled={isRefreshing}>
-                    <RefreshCw size={13} className={isRefreshing ? 'spin-animation' : ''} />
-                    <span>Refresh Payments</span>
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => setTestQrModalOpen(true)}
+                      style={{ gap: '0.35rem' }}
+                    >
+                      <QrCode size={13} /> Test Scannable QR
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleOpenWebhookLogs}
+                      style={{ gap: '0.35rem' }}
+                    >
+                      <Radio size={13} /> Webhook Logs
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setActiveTab('SETTINGS')}
+                      style={{ gap: '0.35rem' }}
+                    >
+                      <Settings size={13} /> Gateway Settings
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleManualRefresh}
+                      disabled={isRefreshing}
+                      style={{ gap: '0.35rem' }}
+                    >
+                      <RefreshCw size={13} className={isRefreshing ? 'spin-animation' : ''} />
+                      <span>Refresh</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* KPI Metrics Summary */}
@@ -806,6 +1065,22 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         {filterKey === 'UNPAID' && `Unpaid (${unpaidPayments.length})`}
                         {filterKey === 'REFUNDED' && `Refund Issued (${refundedPayments.length})`}
                         {filterKey === 'FAILED' && `Rejected (${failedPayments.length})`}
+                      </button>
+                    ))}
+
+                    <span style={{ height: 16, width: 1, background: 'var(--border)', margin: '0 0.25rem' }} />
+
+                    {(['ALL', 'UPI', 'BANK_TRANSFER'] as const).map((gw) => (
+                      <button
+                        key={gw}
+                        type="button"
+                        className={`btn btn-sm ${paymentGatewayFilter === gw ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ fontSize: '0.74rem', padding: '0.25rem 0.55rem' }}
+                        onClick={() => setPaymentGatewayFilter(gw)}
+                      >
+                        {gw === 'ALL' && 'All Gateways'}
+                        {gw === 'UPI' && 'Direct UPI (GPay/PhonePe/Paytm)'}
+                        {gw === 'BANK_TRANSFER' && 'Bank Transfer'}
                       </button>
                     ))}
                   </div>
@@ -1032,6 +1307,15 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                                     >
                                       <Clock size={13} /> Mark Unpaid
                                     </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      title="Resend automated webhook notification for this payment"
+                                      onClick={() => handleResendWebhook(sp.id)}
+                                      disabled={resendingWebhookId === sp.id}
+                                    >
+                                      <Send size={12} className={resendingWebhookId === sp.id ? 'spin-animation' : ''} /> Webhook
+                                    </button>
                                   </>
                                 )}
 
@@ -1121,6 +1405,12 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         upiPaymentEnabled: Boolean(settingsForm.upi_payment_enabled ?? 1),
                         paytmEnabled: Boolean(settingsForm.paytm_enabled ?? 0),
                         customGatewayEnabled: Boolean(settingsForm.custom_gateway_enabled ?? 0),
+
+                        // Automated Direct UPI Verification & Webhooks
+                        autoVerifyUpiUtr: Boolean(settingsForm.auto_verify_upi_utr ?? 1),
+                        webhookUrl: settingsForm.webhook_url,
+                        webhookSecret: settingsForm.webhook_secret,
+                        webhookEnabled: Boolean(settingsForm.webhook_enabled ?? 1),
 
                         // SEO & Monetization
                         metaTitle: settingsForm.meta_title,
@@ -1348,95 +1638,270 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     </p>
                   </div>
 
-                  {/* MASTER GATEWAY: DIRECT UPI QR (Google Pay / PhonePe / Paytm) & BANK TRANSFER */}
-                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-surface)', marginBottom: '1.25rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  {/* MASTER GATEWAY: DIRECT UPI (Google Pay, PhonePe, Paytm) & BANK TRANSFER */}
+                  <div style={{ padding: '1.25rem', borderRadius: 12, border: '1.5px solid #059669', background: 'var(--bg-surface)', marginBottom: '1.5rem', boxShadow: '0 4px 16px rgba(5, 150, 105, 0.08)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.85rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.85rem' }}>
                       <div>
-                        <strong style={{ fontSize: '0.92rem' }}>Master Payment Gateway: Direct UPI (Google Pay, PhonePe, Paytm) & Bank Transfer</strong>
-                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Generates dynamic scannable QR card with manual or automated verification</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '3px 8px', background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0', borderRadius: 6, fontSize: '0.74rem', fontWeight: 800, textTransform: 'uppercase' }}>
+                            <Zap size={13} /> Active Master Gateway
+                          </span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '3px 8px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 6, fontSize: '0.74rem', fontWeight: 700 }}>
+                            Zero Gateway Fee (0%)
+                          </span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '3px 8px', background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 6, fontSize: '0.74rem', fontWeight: 700 }}>
+                            No Merchant Account Required
+                          </span>
+                        </div>
+                        <h3 style={{ margin: '0.45rem 0 0.2rem', fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                          Direct UPI (Google Pay, PhonePe, Paytm) & Bank Transfer
+                        </h3>
+                        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0, maxWidth: 740, lineHeight: 1.45 }}>
+                          Generates a dynamic, scannable QR code card with automated verification for seamless, real-time transactions without a merchant account for website transactions. Provides a simple dashboard to track incoming payments and their status, and supports automated payment success notifications via webhooks for instant order updates.
+                        </p>
                       </div>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(settingsForm.upi_payment_enabled ?? 1)}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, upi_payment_enabled: e.target.checked ? 1 : 0 })}
-                        />
-                        <span className="toggle-slider"></span>
-                        <span style={{ color: settingsForm.upi_payment_enabled ? '#10b981' : '#64748b' }}>
-                          {settingsForm.upi_payment_enabled ? 'UPI Payment ON (Active)' : 'UPI Payment OFF (Disabled)'}
-                        </span>
-                      </label>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setTestQrModalOpen(true)}
+                          style={{ gap: '0.35rem', fontWeight: 700 }}
+                        >
+                          <QrCode size={14} /> Test Scannable QR
+                        </button>
+                        <label className="toggle-switch">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(settingsForm.upi_payment_enabled ?? 1)}
+                            onChange={(e) => setSettingsForm({ ...settingsForm, upi_payment_enabled: e.target.checked ? 1 : 0 })}
+                          />
+                          <span className="toggle-slider"></span>
+                          <span style={{ fontWeight: 700, color: settingsForm.upi_payment_enabled ? '#10b981' : '#64748b' }}>
+                            {settingsForm.upi_payment_enabled ? 'Gateway Active (ON)' : 'Gateway Disabled (OFF)'}
+                          </span>
+                        </label>
+                      </div>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem', alignItems: 'start' }}>
-                      {/* Left: Input Fields */}
-                      <div>
-                        <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                          <label>Platform UPI ID (VPA) *</label>
-                          <input
-                            type="text"
-                            className="input"
-                            placeholder="e.g. taxprofessionals97-1@okaxis or company@icici"
-                            value={settingsForm.upi_id || ''}
-                            onChange={(e) => setSettingsForm({ ...settingsForm, upi_id: e.target.value })}
-                          />
-                        </div>
-                        <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                          <label>UPI Payee / Account Name</label>
-                          <input
-                            type="text"
-                            className="input"
-                            placeholder="e.g. SocietyOS Enterprise SaaS"
-                            value={settingsForm.upi_payee_name || ''}
-                            onChange={(e) => setSettingsForm({ ...settingsForm, upi_payee_name: e.target.value })}
-                          />
-                        </div>
-                        <div className="form-grid">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', alignItems: 'start' }}>
+                      {/* Left Column: UPI & Bank Credentials */}
+                      <div style={{ display: 'grid', gap: '0.85rem' }}>
+                        <div style={{ padding: '0.85rem', background: 'var(--bg-body)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                          <strong style={{ fontSize: '0.86rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.65rem' }}>
+                            <Smartphone size={16} style={{ color: '#059669' }} /> Direct UPI Payee Credentials (VPA)
+                          </strong>
+                          <div className="form-group" style={{ marginBottom: '0.65rem' }}>
+                            <label>Platform Master UPI ID (VPA) *</label>
+                            <div style={{ display: 'flex', gap: '0.4rem' }}>
+                              <input
+                                type="text"
+                                className="input"
+                                placeholder="e.g. taxprofessionals97-1@okaxis or society@icici"
+                                value={settingsForm.upi_id || ''}
+                                onChange={(e) => setSettingsForm({ ...settingsForm, upi_id: e.target.value })}
+                              />
+                              {settingsForm.upi_id && (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(settingsForm.upi_id);
+                                    notify('UPI ID copied to clipboard!', 'success');
+                                  }}
+                                  title="Copy UPI ID"
+                                >
+                                  <Copy size={13} />
+                                </button>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 3 }}>
+                              Supported in Google Pay, PhonePe, Paytm, BHIM, Amazon Pay & any Indian banking app.
+                            </div>
+                          </div>
+
                           <div className="form-group">
-                            <label>Bank Name</label>
+                            <label>UPI Payee Display Name / Merchant Name</label>
                             <input
                               type="text"
                               className="input"
-                              placeholder="HDFC / SBI / ICICI"
-                              value={settingsForm.bank_name || ''}
-                              onChange={(e) => setSettingsForm({ ...settingsForm, bank_name: e.target.value })}
-                            />
-                          </div>
-                          <div className="form-group">
-                            <label>Account Number</label>
-                            <input
-                              type="text"
-                              className="input"
-                              placeholder="Bank Account Number"
-                              value={settingsForm.bank_account_number || ''}
-                              onChange={(e) => setSettingsForm({ ...settingsForm, bank_account_number: e.target.value })}
+                              placeholder="e.g. SocietyOS Enterprise SaaS / Kuku Labs"
+                              value={settingsForm.upi_payee_name || ''}
+                              onChange={(e) => setSettingsForm({ ...settingsForm, upi_payee_name: e.target.value })}
                             />
                           </div>
                         </div>
-                        <div className="form-group" style={{ marginTop: '0.75rem' }}>
-                          <label>IFSC Code</label>
-                          <input
-                            type="text"
-                            className="input"
-                            placeholder="e.g. HDFC0001234"
-                            value={settingsForm.bank_ifsc || ''}
-                            onChange={(e) => setSettingsForm({ ...settingsForm, bank_ifsc: e.target.value.toUpperCase() })}
-                          />
+
+                        {/* Direct Bank Account Transfer */}
+                        <div style={{ padding: '0.85rem', background: 'var(--bg-body)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                          <strong style={{ fontSize: '0.86rem', display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.65rem' }}>
+                            <Building2 size={16} style={{ color: '#2563eb' }} /> Direct Bank Transfer Details (NEFT / IMPS / RTGS)
+                          </strong>
+                          <div className="form-grid">
+                            <div className="form-group">
+                              <label>Bank Name</label>
+                              <input
+                                type="text"
+                                className="input"
+                                placeholder="e.g. HDFC Bank / SBI / ICICI"
+                                value={settingsForm.bank_name || ''}
+                                onChange={(e) => setSettingsForm({ ...settingsForm, bank_name: e.target.value })}
+                              />
+                            </div>
+                            <div className="form-group">
+                              <label>Account Number</label>
+                              <input
+                                type="text"
+                                className="input"
+                                placeholder="Enter Bank Account Number"
+                                value={settingsForm.bank_account_number || ''}
+                                onChange={(e) => setSettingsForm({ ...settingsForm, bank_account_number: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                          <div className="form-group" style={{ marginTop: '0.65rem' }}>
+                            <label>IFSC Code</label>
+                            <input
+                              type="text"
+                              className="input"
+                              placeholder="e.g. HDFC0001234"
+                              value={settingsForm.bank_ifsc || ''}
+                              onChange={(e) => setSettingsForm({ ...settingsForm, bank_ifsc: e.target.value.toUpperCase() })}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Automated Real-time Verification Engine */}
+                        <div style={{ padding: '0.85rem', background: '#ecfdf5', borderRadius: 8, border: '1px solid #a7f3d0' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                            <strong style={{ fontSize: '0.86rem', color: '#065f46', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <CheckCircle size={15} style={{ color: '#059669' }} /> Automated Real-Time UTR Verification
+                            </strong>
+                            <label className="toggle-switch">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(settingsForm.auto_verify_upi_utr ?? 1)}
+                                onChange={(e) => setSettingsForm({ ...settingsForm, auto_verify_upi_utr: e.target.checked ? 1 : 0 })}
+                              />
+                              <span className="toggle-slider"></span>
+                            </label>
+                          </div>
+                          <p style={{ fontSize: '0.76rem', color: '#047857', margin: 0, lineHeight: 1.4 }}>
+                            Automatically validates 10-12 digit bank UTR transaction references, updates payment status to <strong>PAID</strong>, instantly activates the tenant society account in real-time, and fires webhook delivery without manual intervention.
+                          </p>
                         </div>
                       </div>
 
-                      {/* Right: Live Dynamic UPI QR Code Card */}
-                      <div>
-                        <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>
-                          LIVE UPI QR CARD PREVIEW (AS SEEN BY SOCIETIES)
+                      {/* Right Column: Webhook Notifications & Dynamic Scannable QR Preview */}
+                      <div style={{ display: 'grid', gap: '0.85rem' }}>
+                        {/* Automated Webhooks for Instant Order Updates */}
+                        <div style={{ padding: '0.85rem', background: 'var(--bg-body)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+                            <strong style={{ fontSize: '0.86rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <Radio size={16} style={{ color: '#7c3aed' }} /> Automated Webhook Notifications (Instant Order Updates)
+                            </strong>
+                            <label className="toggle-switch">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(settingsForm.webhook_enabled ?? 1)}
+                                onChange={(e) => setSettingsForm({ ...settingsForm, webhook_enabled: e.target.checked ? 1 : 0 })}
+                              />
+                              <span className="toggle-slider"></span>
+                            </label>
+                          </div>
+                          <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: '0 0 0.75rem', lineHeight: 1.4 }}>
+                            Posts real-time HTTP events (<code>payment.success</code>, <code>payment.pending</code>, <code>payment.refunded</code>) to your server with HMAC SHA-256 signatures for automatic order processing.
+                          </p>
+
+                          <div className="form-group" style={{ marginBottom: '0.65rem' }}>
+                            <label>Webhook Target Endpoint URL</label>
+                            <input
+                              type="url"
+                              className="input"
+                              placeholder="https://your-crm.com/api/webhooks/societyos"
+                              value={settingsForm.webhook_url || ''}
+                              onChange={(e) => setSettingsForm({ ...settingsForm, webhook_url: e.target.value })}
+                            />
+                          </div>
+
+                          <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                            <label>Webhook HMAC SHA-256 Secret Key</label>
+                            <input
+                              type="password"
+                              className="input"
+                              placeholder="Enter or generate webhook signing secret"
+                              value={settingsForm.webhook_secret || ''}
+                              onChange={(e) => setSettingsForm({ ...settingsForm, webhook_secret: e.target.value })}
+                            />
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                              Verified via <code>X-SocietyOS-Signature</code> HTTP header.
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={handleTestWebhook}
+                              disabled={webhookTesting || !settingsForm.webhook_url}
+                              style={{ gap: '0.35rem' }}
+                            >
+                              <Send size={13} className={webhookTesting ? 'spin-animation' : ''} />
+                              <span>{webhookTesting ? 'Sending Ping...' : 'Send Test Webhook Ping'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={handleOpenWebhookLogs}
+                              style={{ gap: '0.35rem' }}
+                            >
+                              <Radio size={13} />
+                              <span>View Delivery Logs</span>
+                            </button>
+                          </div>
+
+                          {webhookTestResult && (
+                            <div
+                              style={{
+                                marginTop: '0.65rem',
+                                padding: '0.5rem 0.75rem',
+                                borderRadius: 6,
+                                background: webhookTestResult.success ? '#ecfdf5' : '#fef2f2',
+                                border: `1px solid ${webhookTestResult.success ? '#a7f3d0' : '#fecaca'}`,
+                                fontSize: '0.76rem',
+                                color: webhookTestResult.success ? '#065f46' : '#991b1b',
+                              }}
+                            >
+                              <strong>{webhookTestResult.success ? '✓ Delivery Successful' : '✕ Delivery Failed'}:</strong>{' '}
+                              {webhookTestResult.message || webhookTestResult.error}
+                              {webhookTestResult.durationMs && ` (${webhookTestResult.durationMs}ms)`}
+                            </div>
+                          )}
                         </div>
-                        <UpiQrCard
-                          upiId={settingsForm.upi_id}
-                          payeeName={settingsForm.upi_payee_name || 'SocietyOS Platform'}
-                          amount={2499}
-                          note="Subscription Renewal Sample"
-                          onCopySuccess={(msg) => notify(msg)}
-                        />
+
+                        {/* Scannable Dynamic QR Card Live Preview */}
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                            <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                              DYNAMIC SCANNABLE QR CARD (LIVE PREVIEW)
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
+                              onClick={() => setTestQrModalOpen(true)}
+                            >
+                              Open Tester
+                            </button>
+                          </div>
+                          <UpiQrCard
+                            upiId={settingsForm.upi_id}
+                            payeeName={settingsForm.upi_payee_name || 'SocietyOS Platform'}
+                            amount={2499}
+                            note="Society Subscription Sample"
+                            onCopySuccess={(msg) => notify(msg, 'success')}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2368,6 +2833,159 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
           platformSettings={settingsForm}
           onClose={() => setViewingSubInvoice(null)}
         />
+      )}
+
+      {/* MODAL: DYNAMIC TEST SCANNABLE QR GENERATOR */}
+      {testQrModalOpen && (
+        <div className="modal-backdrop" onClick={() => setTestQrModalOpen(false)}>
+          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <QrCode size={20} color="var(--primary)" />
+                <h3 style={{ margin: 0 }}>Dynamic UPI Scannable QR Code Tester</h3>
+              </div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTestQrModalOpen(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginBottom: '1rem', background: '#f8fafc', padding: '0.85rem', borderRadius: 8, border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '0.4rem' }}>
+                Configure Test Transaction Details:
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.65rem', flexWrap: 'wrap' }}>
+                {[500, 2499, 5499, 19999].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={`btn btn-sm ${testQrAmount === preset ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setTestQrAmount(preset)}
+                  >
+                    ₹{preset.toLocaleString('en-IN')}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, display: 'block', marginBottom: '2px' }}>Custom Amount (₹)</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={testQrAmount}
+                    onChange={(e) => setTestQrAmount(Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 600, display: 'block', marginBottom: '2px' }}>Payment Note</label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={testQrNote}
+                    onChange={(e) => setTestQrNote(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Scannable Card */}
+            <UpiQrCard
+              upiId={settingsForm.platform_upi_id || '9815033782@okbizaxis'}
+              payeeName={settingsForm.platform_upi_merchant_name || 'SocietyOS Platform SaaS'}
+              amount={testQrAmount}
+              note={testQrNote}
+              invoiceNumber="TEST-SUB-001"
+              showInstructions={true}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setTestQrModalOpen(false)}>
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: WEBHOOK DELIVERY LOGS */}
+      {showWebhookLogsModal && (
+        <div className="modal-backdrop" onClick={() => setShowWebhookLogsModal(false)}>
+          <div className="modal-card" style={{ maxWidth: 840 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Send size={18} color="var(--primary)" />
+                <h3 style={{ margin: 0 }}>Automated Payment Webhook Delivery Logs</h3>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={handleOpenWebhookLogs}>
+                  <RefreshCw size={13} /> Refresh
+                </button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowWebhookLogsModal(false)}>
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.85rem' }}>
+              Real-time HTTP delivery logs for automated payment events (<code style={{ fontSize: '0.78rem' }}>payment.success</code>, <code style={{ fontSize: '0.78rem' }}>payment.pending</code>, <code style={{ fontSize: '0.78rem' }}>payment.refunded</code>) dispatched to your external CRM/accounting endpoint.
+            </p>
+
+            <div className="table-wrap" style={{ maxHeight: '420px', overflowY: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Event Type</th>
+                    <th>Destination URL</th>
+                    <th>HTTP Status</th>
+                    <th>Response Body Snippet</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {webhookLogs.map((log: any) => (
+                    <tr key={log.id}>
+                      <td style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                        {(log.created_at || '').replace('T', ' ').slice(0, 19)}
+                      </td>
+                      <td>
+                        <code style={{ fontSize: '0.76rem', background: '#f1f5f9', padding: '2px 5px', borderRadius: 4, fontWeight: 700 }}>
+                          {log.event}
+                        </code>
+                      </td>
+                      <td style={{ fontSize: '0.75rem', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {log.url}
+                      </td>
+                      <td>
+                        <span
+                          className={`badge ${log.status_code >= 200 && log.status_code < 300 ? 'badge-success' : 'badge-danger'}`}
+                          style={{ fontSize: '0.72rem' }}
+                        >
+                          {log.status_code ? `HTTP ${log.status_code}` : 'TIMEOUT / ERR'}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: '0.72rem', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
+                        {log.response_body || 'No response body'}
+                      </td>
+                    </tr>
+                  ))}
+                  {webhookLogs.length === 0 && (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
+                        No webhook delivery logs recorded yet. Send a test ping or process a payment to see automated delivery logs here.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowWebhookLogsModal(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

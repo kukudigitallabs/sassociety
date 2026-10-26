@@ -983,6 +983,17 @@
       box-shadow: none !important;
     }
 
+    /* Zero scrollbars on paper/PDF across all containers */
+    * {
+      scrollbar-width: none !important;
+      -ms-overflow-style: none !important;
+    }
+    *::-webkit-scrollbar {
+      display: none !important;
+      width: 0 !important;
+      height: 0 !important;
+    }
+
     /* Modal Card in Print: Clean bordered printable invoice/receipt */
     .modal-card {
       position: static !important;
@@ -999,6 +1010,17 @@
       background: #ffffff !important;
       color: #0f172a !important;
       page-break-inside: avoid;
+    }
+
+    .printable-bill-card {
+      width: 100% !important;
+      max-width: 100% !important;
+      border: 1.5px solid #0f172a !important;
+      padding: 16px 20px !important;
+      margin: 0 auto !important;
+      overflow: visible !important;
+      page-break-inside: avoid !important;
+      box-shadow: none !important;
     }
 
     .table-wrap {

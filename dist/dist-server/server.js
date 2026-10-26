@@ -9997,7 +9997,7 @@ var require_form_data = __commonJS({
     var parseUrl = __require("url").parse;
     var fs6 = __require("fs");
     var Stream = __require("stream").Stream;
-    var crypto3 = __require("crypto");
+    var crypto4 = __require("crypto");
     var mime = require_mime_types();
     var asynckit = require_asynckit();
     var setToStringTag = require_es_set_tostringtag();
@@ -10206,7 +10206,7 @@ var require_form_data = __commonJS({
       return Buffer.concat([dataBuffer, Buffer.from(this._lastBoundary())]);
     };
     FormData2.prototype._generateBoundary = function() {
-      this._boundary = "--------------------------" + crypto3.randomBytes(12).toString("hex");
+      this._boundary = "--------------------------" + crypto4.randomBytes(12).toString("hex");
     };
     FormData2.prototype.getLengthSync = function() {
       var knownLength = this._overheadLength + this._valueLength;
@@ -11947,7 +11947,7 @@ var require_axios = __commonJS({
   "node_modules/axios/dist/node/axios.cjs"(exports, module) {
     "use strict";
     var FormData$1 = require_form_data();
-    var crypto3 = __require("crypto");
+    var crypto4 = __require("crypto");
     var url = __require("url");
     var HttpsProxyAgent = require_dist();
     var http2 = __require("http");
@@ -13426,7 +13426,7 @@ var require_axios = __commonJS({
         length
       } = alphabet;
       const randomValues = new Uint32Array(size);
-      crypto3.randomFillSync(randomValues);
+      crypto4.randomFillSync(randomValues);
       for (let i = 0; i < size; i++) {
         str += alphabet[randomValues[i] % length];
       }
@@ -17136,7 +17136,7 @@ var require_razorpay_utils = __commonJS({
         return o2 && "function" == typeof Symbol && o2.constructor === Symbol && o2 !== Symbol.prototype ? "symbol" : typeof o2;
       }, _typeof(o);
     }
-    var crypto3 = __require("crypto");
+    var crypto4 = __require("crypto");
     function getDateInSecs(date) {
       return +new Date(date) / 1e3;
     }
@@ -17173,12 +17173,12 @@ var require_razorpay_utils = __commonJS({
       return new Error("\n".concat(summary, "\n") + "Expected(".concat(_typeof(expectedVal), ")\n").concat(prettify(expectedVal), "\n\n") + "Got(".concat(_typeof(gotVal), ")\n").concat(prettify(gotVal)));
     }
     function validateWebhookSignature(body, signature, secret) {
-      var crypto4 = __require("crypto");
+      var crypto5 = __require("crypto");
       if (!isDefined(body) || !isDefined(signature) || !isDefined(secret)) {
         throw Error("Invalid Parameters: Please give request body,signature sent in X-Razorpay-Signature header and webhook secret from dashboard as parameters");
       }
       body = body.toString();
-      var expectedSignature = crypto4.createHmac("sha256", secret).update(body).digest("hex");
+      var expectedSignature = crypto5.createHmac("sha256", secret).update(body).digest("hex");
       return expectedSignature === signature;
     }
     function validatePaymentVerification() {
@@ -17214,8 +17214,8 @@ var require_razorpay_utils = __commonJS({
     function encrypt(dataToEncrypt, secret) {
       try {
         var keyBytes = Buffer.from(secret.slice(0, 16), "utf8");
-        var iv = crypto3.randomBytes(12);
-        var cipher = crypto3.createCipheriv("aes-128-gcm", keyBytes, iv);
+        var iv = crypto4.randomBytes(12);
+        var cipher = crypto4.createCipheriv("aes-128-gcm", keyBytes, iv);
         var encryptedData = cipher.update(dataToEncrypt, "utf8");
         encryptedData = Buffer.concat([encryptedData, cipher["final"]()]);
         var authTag = cipher.getAuthTag();
@@ -21046,7 +21046,12 @@ function initDatabase() {
     "ALTER TABLE subscription_payments ADD COLUMN refund_gateway TEXT NULL",
     "ALTER TABLE households ADD COLUMN opening_balance REAL NOT NULL DEFAULT 0",
     "ALTER TABLE households ADD COLUMN opening_balance_notes TEXT NULL",
-    "ALTER TABLE households ADD COLUMN opening_balance_date TEXT NULL"
+    "ALTER TABLE households ADD COLUMN opening_balance_date TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN webhook_url TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN webhook_secret TEXT NULL",
+    "ALTER TABLE platform_settings ADD COLUMN webhook_enabled INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE platform_settings ADD COLUMN auto_verify_upi_utr INTEGER NOT NULL DEFAULT 1",
+    "CREATE TABLE IF NOT EXISTS webhook_logs (id TEXT PRIMARY KEY, event TEXT NOT NULL, url TEXT NOT NULL, status_code INTEGER NULL, response_body TEXT NULL, success INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))"
   ];
   for (const sql of safeAlterColumns) {
     try {
@@ -21924,7 +21929,8 @@ var MYSQL_TABLES = [
   "expenses",
   "ledger_entries",
   "notifications",
-  "audit_logs"
+  "audit_logs",
+  "webhook_logs"
 ];
 var mysqlPool = null;
 var mysqlConnected = false;
@@ -22088,6 +22094,7 @@ async function syncToMysqlAfterWrite() {
 var import_razorpay = __toESM(require_razorpay(), 1);
 import fs4 from "node:fs";
 import path4 from "node:path";
+import crypto3 from "node:crypto";
 function resolveRazorpayCredentials(societyId) {
   if (societyId) {
     const socSettings = db.prepare("SELECT razorpay_key_id, razorpay_key_secret_encrypted FROM society_settings WHERE society_id = ?").get(societyId);
@@ -22120,6 +22127,74 @@ function isValid10DigitPhone(phone) {
   const digits = String(phone).replace(/\D/g, "");
   const tenDigits = digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits;
   return /^[6-9]\d{9}$/.test(tenDigits);
+}
+async function dispatchPlatformWebhook(event, payload) {
+  const start = Date.now();
+  try {
+    const platform = db.prepare("SELECT webhook_url, webhook_secret, webhook_enabled FROM platform_settings LIMIT 1").get();
+    if (!platform?.webhook_enabled || !platform?.webhook_url) {
+      return { success: false, error: "Webhooks are disabled or no target URL is configured." };
+    }
+    const url = platform.webhook_url.trim();
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      return { success: false, error: "Invalid webhook URL (must begin with http:// or https://)." };
+    }
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const eventId = `evt_${uuid().replace(/-/g, "").slice(0, 16)}`;
+    const fullPayload = {
+      id: eventId,
+      event,
+      timestamp,
+      data: payload
+    };
+    const rawBody = JSON.stringify(fullPayload);
+    const secret = (platform.webhook_secret || "").trim() || "societyos_webhook_secret";
+    const signature = crypto3.createHmac("sha256", secret).update(rawBody).digest("hex");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7e3);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-SocietyOS-Signature": signature,
+        "X-SocietyOS-Event": event,
+        "X-SocietyOS-Delivery": eventId,
+        "User-Agent": "SocietyOS-Webhook-Dispatcher/2.0"
+      },
+      body: rawBody,
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    const durationMs = Date.now() - start;
+    const text = await res.text().catch(() => "");
+    const isSuccess = res.ok ? 1 : 0;
+    try {
+      db.prepare(`
+        INSERT INTO webhook_logs (id, event, url, status_code, response_body, success, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(eventId, event, url, res.status, text.slice(0, 1e3), isSuccess, rawBody);
+    } catch (e) {
+      console.warn("Failed to insert webhook_log:", e);
+    }
+    return {
+      success: res.ok,
+      statusCode: res.status,
+      responseBody: text.slice(0, 500),
+      durationMs
+    };
+  } catch (err) {
+    const durationMs = Date.now() - start;
+    const errMsg = err?.message || "Webhook network dispatch failed";
+    try {
+      const errEventId = `evt_${uuid().replace(/-/g, "").slice(0, 16)}`;
+      db.prepare(`
+        INSERT INTO webhook_logs (id, event, url, status_code, response_body, success, payload)
+        VALUES (?, ?, ?, 0, ?, 0, ?)
+      `).run(errEventId, event, "FAILED", errMsg, JSON.stringify(payload));
+    } catch {
+    }
+    return { success: false, error: errMsg, durationMs };
+  }
 }
 function sendJson(res, status, data) {
   const payload = JSON.stringify(data);
@@ -22852,7 +22927,8 @@ async function handleApiRequest(ctx) {
       const plan = db.prepare("SELECT * FROM subscription_plans WHERE id = ?").get(subPayment.plan_id);
       const platform = db.prepare("SELECT * FROM platform_settings LIMIT 1").get();
       const soc = db.prepare("SELECT * FROM societies WHERE id = ?").get(subPayment.society_id);
-      const autoApprove = Boolean(platform?.auto_approve_paid_societies);
+      const autoVerifyEnabled = Boolean(platform?.auto_verify_upi_utr ?? 1);
+      const autoApprove = (Boolean(platform?.auto_approve_paid_societies) || autoVerifyEnabled) && ref.length >= 6;
       const nowIso = (/* @__PURE__ */ new Date()).toISOString();
       const endsIso = new Date(Date.now() + Number(plan?.duration_days || 30) * 864e5).toISOString();
       const graceEndsIso = new Date(
@@ -22906,6 +22982,20 @@ async function handleApiRequest(ctx) {
         });
         db.exec("COMMIT");
         syncToMysqlAfterWrite();
+        dispatchPlatformWebhook(autoApprove ? "payment.success" : "payment.pending", {
+          invoiceNumber: subPayment.invoice_number,
+          orderId: subPayment.gateway_order_id,
+          paymentId: ref,
+          utr: ref,
+          amount: subPayment.total_amount,
+          taxAmount: subPayment.tax_amount,
+          societyId: subPayment.society_id,
+          societyName: soc?.name,
+          planName: plan?.name,
+          status: autoApprove ? "PAID" : "PENDING_APPROVAL",
+          verifiedAt: autoApprove ? nowIso : null,
+          paymentMethod: "DIRECT_UPI"
+        }).catch((e) => console.warn("Automated webhook failed:", e));
         return sendJson(res, 200, {
           success: true,
           message: autoApprove ? "Subscription payment verified and society activated!" : "Payment reference submitted successfully. Super Admin will verify and activate your society.",
@@ -23805,6 +23895,10 @@ async function handleApiRequest(ctx) {
         const customHeaderScripts = body.customHeaderScripts ?? body.custom_header_scripts;
         const logoUrl = body.logoUrl ?? body.logo_url;
         const darkLogoUrl = body.darkLogoUrl ?? body.dark_logo_url;
+        const webhookUrl = body.webhookUrl ?? body.webhook_url;
+        const webhookSecret = body.webhookSecret ?? body.webhook_secret;
+        const webhookEnabled = body.webhookEnabled ?? body.webhook_enabled;
+        const autoVerifyUpiUtr = body.autoVerifyUpiUtr ?? body.auto_verify_upi_utr;
         db.prepare(`
           UPDATE platform_settings
           SET platform_name = COALESCE(?, platform_name),
@@ -23855,6 +23949,10 @@ async function handleApiRequest(ctx) {
               custom_header_scripts = COALESCE(?, custom_header_scripts),
               logo_url = COALESCE(?, logo_url),
               dark_logo_url = COALESCE(?, dark_logo_url),
+              webhook_url = COALESCE(?, webhook_url),
+              webhook_secret = COALESCE(?, webhook_secret),
+              webhook_enabled = COALESCE(?, webhook_enabled),
+              auto_verify_upi_utr = COALESCE(?, auto_verify_upi_utr),
               updated_at = datetime('now')
           WHERE id = 'default'
         `).run(
@@ -23905,7 +24003,11 @@ async function handleApiRequest(ctx) {
           googleAnalyticsId !== void 0 ? googleAnalyticsId : null,
           customHeaderScripts !== void 0 ? customHeaderScripts : null,
           logoUrl !== void 0 ? logoUrl : null,
-          darkLogoUrl !== void 0 ? darkLogoUrl : null
+          darkLogoUrl !== void 0 ? darkLogoUrl : null,
+          webhookUrl !== void 0 ? webhookUrl : null,
+          webhookSecret !== void 0 ? webhookSecret : null,
+          webhookEnabled !== void 0 ? webhookEnabled ? 1 : 0 : null,
+          autoVerifyUpiUtr !== void 0 ? autoVerifyUpiUtr ? 1 : 0 : null
         );
         syncToMysqlAfterWrite();
         logAudit({
@@ -24179,6 +24281,109 @@ async function handleApiRequest(ctx) {
           details: { reason, refundAmount: finalRefundAmt, refundReference }
         });
         return sendJson(res, 200, { message: "Refund issue details updated successfully." });
+      }
+      if (pathname === "/api/super-admin/webhooks/test" && method === "POST") {
+        const { webhookUrl, webhookSecret } = body;
+        const targetUrl = (webhookUrl || "").trim();
+        const platform = db.prepare("SELECT webhook_url, webhook_secret FROM platform_settings LIMIT 1").get();
+        const effectiveUrl = targetUrl || platform?.webhook_url;
+        if (!effectiveUrl) {
+          return sendJson(res, 400, { error: "Please enter a target Webhook URL to test." });
+        }
+        const effectiveSecret = (webhookSecret !== void 0 ? webhookSecret : platform?.webhook_secret) || "societyos_secret";
+        const start = Date.now();
+        const testPayload = {
+          test: true,
+          event: "payment.success",
+          message: "SocietyOS Automated Webhook Test Ping \u2014 Delivery Verified!",
+          sampleOrder: {
+            invoiceNumber: "SUB-INV-2026-TEST",
+            societyName: "Green Valley Residency",
+            amount: 2499,
+            currency: "INR",
+            paymentMethod: "DIRECT_UPI",
+            utr: "425188992011",
+            status: "PAID",
+            verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
+          }
+        };
+        const rawBody = JSON.stringify({
+          id: `evt_test_${uuid().replace(/-/g, "").slice(0, 12)}`,
+          event: "payment.success",
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          data: testPayload
+        });
+        const signature = crypto3.createHmac("sha256", effectiveSecret).update(rawBody).digest("hex");
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 7e3);
+          const response = await fetch(effectiveUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-SocietyOS-Signature": signature,
+              "X-SocietyOS-Event": "payment.success",
+              "User-Agent": "SocietyOS-Webhook-Dispatcher/2.0"
+            },
+            body: rawBody,
+            signal: controller.signal
+          });
+          clearTimeout(timeout);
+          const responseText = await response.text().catch(() => "");
+          const durationMs = Date.now() - start;
+          try {
+            db.prepare(`
+              INSERT INTO webhook_logs (id, event, url, status_code, response_body, success, payload)
+              VALUES (?, 'payment.test', ?, ?, ?, ?, ?)
+            `).run(uuid(), effectiveUrl, response.status, responseText.slice(0, 1e3), response.ok ? 1 : 0, rawBody);
+          } catch {
+          }
+          return sendJson(res, 200, {
+            success: response.ok,
+            statusCode: response.status,
+            statusText: response.statusText,
+            responseBody: responseText.slice(0, 500),
+            durationMs,
+            message: response.ok ? `Webhook test succeeded! Server responded with HTTP ${response.status} (${durationMs}ms).` : `Webhook server responded with HTTP ${response.status}: ${responseText.slice(0, 100)}`
+          });
+        } catch (err) {
+          const durationMs = Date.now() - start;
+          return sendJson(res, 200, {
+            success: false,
+            statusCode: 0,
+            durationMs,
+            error: err?.message || "Could not connect to webhook URL",
+            message: `Delivery failed: ${err?.message || "Connection error"}. Please verify your server URL and network accessibility.`
+          });
+        }
+      }
+      if (pathname === "/api/super-admin/webhooks/logs" && method === "GET") {
+        const logs = db.prepare("SELECT * FROM webhook_logs ORDER BY created_at DESC LIMIT 30").all();
+        return sendJson(res, 200, { logs });
+      }
+      const resendWebhookMatch = pathname.match(/^\/api\/super-admin\/subscription-payments\/([^/]+)\/resend-webhook$/);
+      if (resendWebhookMatch && method === "POST") {
+        const subPayId = resendWebhookMatch[1];
+        const sp = db.prepare("SELECT sp.*, s.name as society_name FROM subscription_payments sp JOIN societies s ON s.id = sp.society_id WHERE sp.id = ?").get(subPayId);
+        if (!sp) return sendJson(res, 404, { error: "Subscription payment not found." });
+        const outcome = await dispatchPlatformWebhook(sp.status === "PAID" ? "payment.success" : "payment.status_update", {
+          invoiceNumber: sp.invoice_number,
+          orderId: sp.gateway_order_id,
+          paymentId: sp.gateway_payment_id,
+          utr: sp.gateway_payment_id,
+          amount: sp.total_amount,
+          taxAmount: sp.tax_amount,
+          societyId: sp.society_id,
+          societyName: sp.society_name,
+          status: sp.status,
+          verifiedAt: sp.paid_at || (/* @__PURE__ */ new Date()).toISOString(),
+          paymentMethod: sp.payment_gateway || "DIRECT_UPI"
+        });
+        return sendJson(res, 200, {
+          success: outcome.success,
+          statusCode: outcome.statusCode,
+          message: outcome.success ? `Webhook delivered successfully (HTTP ${outcome.statusCode})!` : `Webhook delivery failed: ${outcome.error || "Check webhook URL in settings"}`
+        });
       }
     }
     if (pathname.startsWith("/api/society")) {
