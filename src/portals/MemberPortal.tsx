@@ -6,6 +6,7 @@ import {
   User,
   CreditCard,
   Printer,
+  Smartphone,
   PhoneCall,
   Megaphone,
   Calendar,
@@ -25,9 +26,10 @@ import {
   Eye,
   ExternalLink,
 } from 'lucide-react';
-import { apiFetch, uploadFileAsBase64, openRazorpayCheckout, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
+import { apiFetch, uploadFileAsBase64, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
 import { printInvoiceDocument, numberToIndianWords } from '../utils/invoicePrinter.ts';
+import { UpiQrCard } from '../components/UpiQrCard.tsx';
 
 interface MemberPortalProps {
   user: any;
@@ -238,61 +240,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
     setModal('PAY_BILL');
   }
 
-  async function handleRazorpayBillPayment(targetBillIds: string[], overrideAmount?: number) {
-    const targetBills = bills.filter((b) => targetBillIds.includes(b.id));
-    const hasPendingVerification =
-      pendingVerifications.length > 0 ||
-      targetBills.some((b) => b.status === 'PENDING_VERIFICATION');
 
-    if (hasPendingVerification) {
-      notify(
-        'Already payment made under verification, cannot make another payment till payment status is paid or unpaid.',
-        'error'
-      );
-      return;
-    }
-
-    const payableBills = targetBills.filter(
-      (b) => b.status !== 'PAID' && b.status !== 'PENDING_VERIFICATION' && Number(b.balance_amount) > 0
-    );
-    if (payableBills.length === 0) {
-      notify('No unpaid bills available for payment.', 'error');
-      return;
-    }
-
-    const validIds = payableBills.map((b) => b.id);
-    const defaultSum = payableBills.reduce((acc, b) => acc + Number(b.balance_amount || b.total_amount || 0), 0);
-    const amountToPay = overrideAmount && overrideAmount > 0 ? overrideAmount : defaultSum;
-
-    try {
-      await openRazorpayCheckout({
-        amountRupees: amountToPay,
-        currency: 'INR',
-        receipt: `bill_${Date.now()}`,
-        merchantName: society.name || 'SocietyOS RWA',
-        description: `Maintenance Bill Payment — Flat ${member.flat_number}`,
-        prefill: {
-          name: member?.full_name || user?.fullName || user?.email || '',
-          email: member?.email || user?.email || '',
-          contact: member?.phone || user?.phone || '',
-        },
-        billIds: validIds,
-        onSuccess: (verifyRes) => {
-          notify(verifyRes.message || 'Payment verified and receipt generated!');
-          setModal('NONE');
-          loadMemberDashboard();
-        },
-        onDismiss: () => {
-          notify('Payment cancelled by user.', 'error');
-        },
-        onError: (errMsg) => {
-          notify(errMsg, 'error');
-        },
-      });
-    } catch (err: any) {
-      notify(err.message || 'Failed to launch Razorpay checkout.', 'error');
-    }
-  }
 
   return (
     <div className="app-shell">
@@ -433,7 +381,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                     <div>
                       <h3>Current Month & Unpaid Society Bills</h3>
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                        Pay via UPI ({settings.upi_id || 'society@upi'}), Google Pay, Paytm, Razorpay, or Bank Transfer and submit your reference for verification.
+                        Pay via Google Pay, PhonePe, Paytm, Direct UPI ({settings.upi_id || 'society@upi'}), or Bank Transfer and submit reference for verification.
                       </p>
                       {Number(data?.openingBalanceDues || 0) > 0 && (
                         <div style={{ marginTop: '0.35rem', fontSize: '0.82rem', color: 'var(--primary)', fontWeight: 600 }}>
@@ -450,16 +398,9 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                       <button
                         type="button"
                         className="btn btn-primary"
-                        onClick={() => handleRazorpayBillPayment(unpaidBills.map((b) => b.id))}
-                      >
-                        <CreditCard size={16} /> Pay Instant via Razorpay ({formatCurrency(data?.totalOutstanding)})
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
                         onClick={() => openPaymentModalForBills(unpaidBills.map((b) => b.id))}
                       >
-                        Submit UPI / Bank Proof
+                        <Smartphone size={16} /> Pay via UPI (GPay / PhonePe / Paytm) ({formatCurrency(data?.totalOutstanding)})
                       </button>
                     </div>
                   </div>
@@ -625,16 +566,9 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                                   <button
                                     type="button"
                                     className="btn btn-primary btn-sm"
-                                    onClick={() => handleRazorpayBillPayment([b.id])}
-                                  >
-                                    <CreditCard size={13} /> Pay via Razorpay
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary btn-sm"
                                     onClick={() => openPaymentModalForBills([b.id])}
                                   >
-                                    UPI / Offline Proof
+                                    <Smartphone size={13} /> Pay via UPI (GPay/PhonePe/Paytm)
                                   </button>
                                 </>
                               )}
@@ -1047,29 +981,31 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
       {/* MODAL: SUBMIT PAYMENT PROOF */}
       {modal === 'PAY_BILL' && (
         <div className="modal-backdrop" onClick={() => setModal('NONE')}>
-          <div className="modal-card" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
-            <h3>Submit Bill Payment & Verification Proof</h3>
-            <div className="card" style={{ background: 'var(--bg-subtle)', marginTop: '0.75rem', padding: '0.85rem', fontSize: '0.82rem' }}>
-              <div><strong>Society UPI ID:</strong> <code>{settings.upi_id || 'society@hdfcbank'}</code> ({settings.upi_payee_name || society.name})</div>
-              <div><strong>Bank Transfer:</strong> {settings.bank_name || 'HDFC Bank'} • A/C: <code>{settings.bank_account_number || '50200089412210'}</code> • IFSC: <code>{settings.bank_ifsc || 'HDFC0001245'}</code></div>
-              <div style={{ marginTop: '0.6rem' }}>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => handleRazorpayBillPayment(selectedBillIds, payForm.amount)}
-                >
-                  <CreditCard size={14} /> Pay Instant Online with Razorpay Checkout
-                </button>
-              </div>
+          <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
+            <h3>Pay Society Maintenance Bills</h3>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+              Scan the official QR code using Google Pay, PhonePe, Paytm, or BHIM UPI, then submit your transaction reference.
+            </p>
+
+            <div style={{ marginTop: '0.75rem', marginBottom: '0.75rem' }}>
+              <UpiQrCard
+                upiId={settings.upi_id || ''}
+                payeeName={settings.upi_merchant_name || society.name}
+                amount={payForm.amount}
+                invoiceNumber={selectedBillIds.length === 1 ? bills.find((b) => b.id === selectedBillIds[0])?.bill_number : undefined}
+                compact
+              />
             </div>
+
+            {settings.bank_name && (
+              <div className="card" style={{ background: 'var(--bg-subtle)', padding: '0.65rem 0.85rem', fontSize: '0.78rem', marginBottom: '0.75rem' }}>
+                <div><strong>Direct Bank Transfer:</strong> {settings.bank_name} • A/C: <code>{settings.bank_account_number}</code> • IFSC: <code>{settings.bank_ifsc}</code></div>
+              </div>
+            )}
 
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (payForm.paymentMethod === 'RAZORPAY' && !payForm.referenceNumber.trim()) {
-                  await handleRazorpayBillPayment(selectedBillIds, payForm.amount);
-                  return;
-                }
                 try {
                   const res = await apiFetch('/api/member/payments', {
                     method: 'POST',
@@ -1085,17 +1021,18 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                   notify(err.message, 'error');
                 }
               }}
-              style={{ display: 'grid', gap: '0.85rem', marginTop: '1rem' }}
+              style={{ display: 'grid', gap: '0.85rem' }}
             >
               <div className="form-grid">
                 <div className="form-group">
-                  <label>Payment Method *</label>
+                  <label>Payment App / Method *</label>
                   <select className="select" value={payForm.paymentMethod} onChange={(e) => setPayForm({ ...payForm, paymentMethod: e.target.value })}>
-                    {Boolean(settings.upi_enabled ?? 1) && <option value="UPI">Standard UPI</option>}
-                    {Boolean(settings.gpay_upi_enabled ?? 1) && <option value="GPAY_UPI">Google Pay (UPI Flow)</option>}
-                    {Boolean(settings.paytm_enabled ?? 1) && <option value="PAYTM">Paytm</option>}
-                    {Boolean(settings.razorpay_enabled ?? 1) && <option value="RAZORPAY">Razorpay Gateway</option>}
+                    <option value="GPAY_UPI">Google Pay (GPay UPI)</option>
+                    <option value="PHONEPE_UPI">PhonePe UPI</option>
+                    <option value="PAYTM">Paytm UPI / Wallet</option>
+                    <option value="UPI">BHIM / Any Other UPI</option>
                     {Boolean(settings.bank_transfer_enabled ?? 1) && <option value="BANK_TRANSFER">NEFT / IMPS Bank Transfer</option>}
+                    <option value="CASH">Cash / Cheque</option>
                   </select>
                 </div>
                 <div className="form-group">

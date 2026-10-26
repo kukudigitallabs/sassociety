@@ -12,14 +12,16 @@ import {
   Globe,
   Moon,
   Sun,
+  Smartphone,
   AlertCircle,
   KeyRound,
   ArrowRight,
 } from 'lucide-react';
-import { apiFetch, uploadFileAsBase64, setStoredToken, openRazorpayCheckout, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
+import { apiFetch, uploadFileAsBase64, setStoredToken, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
 import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
 import { GoogleAdBanner } from '../components/GoogleAdBanner.tsx';
+import { UpiQrCard } from '../components/UpiQrCard.tsx';
 import { applyPlatformMeta } from '../utils/meta.ts';
 
 interface PublicPortalProps {
@@ -75,6 +77,8 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
   });
   const [pendingOrder, setPendingOrder] = useState<any | null>(null);
   const [pendingToken, setPendingToken] = useState<string | null>(null);
+  const [subUtr, setSubUtr] = useState('');
+  const [subProofUrl, setSubProofUrl] = useState('');
 
   // Public Member Enrolment State (Locked to the invited society)
   const [enrollCode] = useState(initialEnrollCode || 'GVR-2026');
@@ -222,7 +226,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
       if (res.paymentOrder) {
         setPendingOrder(res.paymentOrder);
         setPendingToken(res.token);
-        notify('Registration created! Complete Razorpay payment verification to activate subscription.');
+        notify('Registration created! Please scan the Platform UPI QR code and submit your 12-digit UTR reference number.');
       } else {
         setStoredToken(res.token);
         notify(res.message);
@@ -235,46 +239,34 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
     }
   }
 
-  async function handleRazorpaySubscriptionCheckout() {
+  async function handleUpiSubscriptionSubmit(e: React.FormEvent) {
+    e.preventDefault();
     if (!pendingOrder) return;
+    if (!subUtr.trim()) {
+      notify('Please enter your 12-digit UPI / UTR transaction reference number.', 'error');
+      return;
+    }
     setLoading(true);
     try {
-      await openRazorpayCheckout({
-        amountRupees: Number(pendingOrder.totalAmount),
-        currency: pendingOrder.currency || 'INR',
-        receipt: pendingOrder.invoiceNumber || `sub_${Date.now()}`,
-        merchantName: platform?.platform_name || 'SocietyOS Enterprise SaaS',
-        description: `SaaS Subscription (${pendingOrder.invoiceNumber})`,
-        prefill: {
-          name: regForm.adminName,
-          email: regForm.email,
-          contact: regForm.phone,
-        },
-        subscriptionPaymentId: pendingOrder.subscriptionPaymentId,
-        legacyOrderId: pendingOrder.orderId,
-        isSubscription: true,
-        token: pendingToken,
-        onSuccess: (verifyRes) => {
-          if (pendingToken) {
-            setStoredToken(pendingToken);
-          }
-          notify(verifyRes.message || 'Subscription payment verified!');
-          setPendingOrder(null);
-          setLoading(false);
-          onAuthenticated();
-        },
-        onDismiss: () => {
-          setLoading(false);
-          notify('Payment cancelled: checkout modal was closed before completing payment.', 'error');
-        },
-        onError: (errMsg) => {
-          setLoading(false);
-          notify(errMsg, 'error');
+      const res = await apiFetch<any>('/api/public/subscription-upi/submit', {
+        method: 'POST',
+        body: {
+          orderId: pendingOrder.orderId,
+          legacyOrderId: pendingOrder.orderId,
+          utr: subUtr.trim(),
+          proofUrl: subProofUrl || null,
         },
       });
+      if (pendingToken) {
+        setStoredToken(pendingToken);
+      }
+      notify(res.message || 'Subscription payment reference submitted!');
+      setPendingOrder(null);
+      setLoading(false);
+      onAuthenticated();
     } catch (err: any) {
       setLoading(false);
-      notify(err.message || 'Failed to initiate Razorpay checkout.', 'error');
+      notify(err.message || 'Failed to submit subscription payment.', 'error');
     }
   }
 
@@ -383,7 +375,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                 : 'Complete SaaS Platform for Residential Societies, Apartments & RWAs'}
             </h1>
             <p style={{ fontSize: 'clamp(0.92rem, 2vw, 1.05rem)', color: 'var(--text-muted)', maxWidth: '62ch' }}>
-              Automated monthly billing, duplicate-proof household registration, verified UPI & Razorpay collections, double-entry accounting ledger, staff duty tracking, and resident helpdesk — all in one multi-tenant cloud platform.
+              Automated monthly billing, duplicate-proof household registration, verified Google Pay, PhonePe, Paytm & Direct UPI collections, double-entry accounting ledger, staff duty tracking, and resident helpdesk — all in one multi-tenant cloud platform.
             </p>
             <div style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
               <button type="button" className="btn btn-primary" style={{ padding: '0.75rem 1.4rem', fontSize: '0.95rem' }} onClick={() => setActiveModal('REGISTER_SOCIETY')}>
@@ -561,7 +553,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                     <CheckCircle2 size={15} color="var(--success)" /> Bulk Monthly Billing & Custom Charges
                   </li>
                   <li style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                    <CheckCircle2 size={15} color="var(--success)" /> UPI, Google Pay, Paytm & Razorpay Verification
+                    <CheckCircle2 size={15} color="var(--success)" /> Instant Google Pay, PhonePe, Paytm & Direct UPI
                   </li>
                   <li style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                     <CheckCircle2 size={15} color="var(--success)" /> Complete Accounting Ledger & PDF/CSV Reports
@@ -791,28 +783,72 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
             {pendingOrder ? (
               <div style={{ display: 'grid', gap: '1rem' }}>
                 <div className="card" style={{ background: 'var(--bg-subtle)' }}>
-                  <h4>Complete Subscription Payment (Razorpay Gateway)</h4>
+                  <h4>Complete SaaS Subscription Payment</h4>
                   <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginTop: 4 }}>
                     Invoice: <strong>{pendingOrder.invoiceNumber}</strong> • Order ID: <code>{pendingOrder.orderId}</code>
                   </p>
-                  <div style={{ marginTop: '0.75rem', fontSize: '1.25rem', fontWeight: 800 }}>
+                  <div style={{ marginTop: '0.5rem', fontSize: '1.25rem', fontWeight: 800 }}>
                     Total Payable: {formatCurrency(pendingOrder.totalAmount)} <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>(incl. GST)</span>
                   </div>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                    Security Notice: Subscriptions are verified on the backend using HMAC-SHA256 signature verification after Razorpay Standard Checkout completes.
-                  </p>
                 </div>
-                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={loading}
-                    onClick={handleRazorpaySubscriptionCheckout}
-                  >
-                    <CreditCard size={16} />
-                    {loading ? 'Opening Razorpay Checkout...' : 'Pay Now with Razorpay Checkout'}
-                  </button>
-                </div>
+
+                <UpiQrCard
+                  upiId={platform?.platform_upi_id || 'societyos@upi'}
+                  payeeName={platform?.platform_upi_name || 'SocietyOS Platform'}
+                  amount={Number(pendingOrder.totalAmount)}
+                  invoiceNumber={pendingOrder.invoiceNumber}
+                  compact
+                />
+
+                <form onSubmit={handleUpiSubscriptionSubmit} style={{ display: 'grid', gap: '0.85rem' }}>
+                  <div className="form-group">
+                    <label>Enter 12-digit UPI / Bank Reference (UTR) Number *</label>
+                    <input
+                      type="text"
+                      required
+                      className="input"
+                      placeholder="e.g., 428910229182 (Check GPay / PhonePe / Paytm receipt)"
+                      value={subUtr}
+                      onChange={(e) => setSubUtr(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Optional Screenshot / Proof of Payment</label>
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      className="input"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const url = await uploadFileAsBase64(file);
+                          setSubProofUrl(url);
+                          notify('Payment screenshot uploaded.');
+                        } catch (err: any) {
+                          notify(err.message, 'error');
+                        }
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setPendingOrder(null)}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={loading}
+                    >
+                      <Smartphone size={16} />
+                      {loading ? 'Submitting Payment...' : 'Confirm Subscription Payment'}
+                    </button>
+                  </div>
+                </form>
               </div>
             ) : (
               <form onSubmit={handleRegisterSociety} style={{ display: 'grid', gap: '1rem' }}>
@@ -967,7 +1003,7 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                       {platform?.default_trial_enabled && (
                         <option value="TRIAL">Start with {platform.default_trial_days}-Day Free Trial</option>
                       )}
-                      <option value="PAID">Pay Subscription Now via Razorpay</option>
+                      <option value="PAID">Pay Subscription Now via UPI (Google Pay / PhonePe / Paytm)</option>
                     </select>
                   </div>
                 </div>

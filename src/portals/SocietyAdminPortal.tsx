@@ -41,7 +41,7 @@ import {
   Edit2,
   Upload,
 } from 'lucide-react';
-import { apiFetch, uploadFileAsBase64, downloadCsv, openRazorpayCheckout, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
+import { apiFetch, uploadFileAsBase64, downloadCsv, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
 import { UpiQrCard } from '../components/UpiQrCard.tsx';
 import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
@@ -1069,10 +1069,10 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         {subSummary?.upiPaymentEnabled !== false && (
                           <button
                             type="button"
-                            className="btn btn-secondary"
+                            className="btn btn-primary"
                             onClick={() => setModal('PAY_SUBSCRIPTION_UPI')}
                           >
-                            <QrCode size={15} /> Pay via UPI / Bank Transfer
+                            <Smartphone size={15} /> Pay {formatCurrency(subSummary.totalAmountDue)} via UPI (GPay/PhonePe/Paytm)
                           </button>
                         )}
                         <button
@@ -1082,53 +1082,6 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         >
                           <Bell size={15} /> Notifications List ({allNotificationsList.length})
                         </button>
-                        {subSummary?.razorpayEnabled !== false ? (
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            onClick={async () => {
-                              try {
-                                await openRazorpayCheckout({
-                                  amountRupees: subSummary.totalAmountDue,
-                                  currency: 'INR',
-                                  receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
-                                  merchantName: 'SocietyOS Platform Subscription',
-                                  description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
-                                  prefill: {
-                                    name: user?.fullName || user?.email || currentSociety.name,
-                                    email: user?.email || currentSociety.contact_email,
-                                    contact: user?.phone || currentSociety.contact_phone,
-                                  },
-                                  isSubscription: true,
-                                  societyId: currentSociety.id,
-                                  planId: subSummary.planId,
-                                  subscriptionPaymentId: subSummary.pendingInvoice?.id,
-                                  onSuccess: (verified: any) => {
-                                    notify(
-                                      verified?.message ||
-                                        `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified! Society is ACTIVE & APPROVED.`
-                                    );
-                                    refreshCurrentTab();
-                                  },
-                                  onDismiss: () => {
-                                    notify('Subscription checkout was cancelled.', 'error');
-                                  },
-                                  onError: (errMsg: string) => {
-                                    notify(errMsg || 'Subscription payment verification failed.', 'error');
-                                  },
-                                });
-                              } catch (err: any) {
-                                notify(err.message || 'Subscription payment was cancelled or failed.', 'error');
-                              }
-                            }}
-                          >
-                            <CreditCard size={15} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Subscription Now
-                          </button>
-                        ) : (
-                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', background: 'var(--surface-sunken, #f1f5f9)', padding: '0.35rem 0.65rem', borderRadius: 6, border: '1px solid var(--border)' }}>
-                            Online Payment Gateway is currently disabled. Please use direct UPI QR or bank transfer.
-                          </span>
-                        )}
                       </div>
                     </div>
 
@@ -1232,7 +1185,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                           {subSummary.pendingInvoice
                             ? `Pending Invoice: ${subSummary.pendingInvoice.invoice_number}`
-                            : 'Auto-approved upon Razorpay settlement'}
+                            : 'Auto-approved upon UPI settlement'}
                         </div>
                       </div>
                     </div>
@@ -3201,7 +3154,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             <div className="card">
               <h3>Society Branding, Payment Methods & Custom Payment Gateway Integration</h3>
               <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                Configure your society's own Payment Gateway API keys (Razorpay, Paytm, or Custom Merchant Gateway), UPI ID, and Bank details for receiving resident maintenance payments directly into your society account. Secret keys are stored encrypted on the server and never exposed in browser responses.
+                Configure your society's UPI ID (Google Pay, PhonePe, Paytm), QR Code, and Bank details for receiving resident maintenance payments directly into your society account.
               </p>
               <form
                 onSubmit={async (e) => {
@@ -3223,16 +3176,12 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                       upiEnabled: Boolean(set.upi_enabled),
                       gpayUpiEnabled: Boolean(set.gpay_upi_enabled),
                       paytmEnabled: Boolean(set.paytm_enabled),
-                      razorpayEnabled: Boolean(set.razorpay_enabled),
                       bankTransferEnabled: Boolean(set.bank_transfer_enabled),
                       upiId: set.upi_id,
                       upiPayeeName: set.upi_payee_name,
                       bankName: set.bank_name,
                       bankAccountNumber: set.bank_account_number,
                       bankIfsc: set.bank_ifsc,
-                      razorpayKeyId: set.razorpay_key_id,
-                      razorpayKeySecret: set.razorpay_key_secret_input || undefined,
-                      razorpayWebhookSecret: set.razorpay_webhook_secret_input || undefined,
                       paytmMerchantId: set.paytm_merchant_id,
                       paytmMerchantKey: set.paytm_merchant_key_input || undefined,
                       customGatewayName: set.custom_gateway_name,
@@ -3360,10 +3309,9 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 <h4>Enabled Resident Payment Methods</h4>
                 <div className="form-grid">
                   {[
-                    ['upi_enabled', 'Standard UPI Flow'],
-                    ['gpay_upi_enabled', 'Google Pay (via UPI Intent)'],
-                    ['paytm_enabled', 'Paytm Integration'],
-                    ['razorpay_enabled', 'Razorpay Gateway'],
+                    ['upi_enabled', 'Direct UPI (QR Code & VPA)'],
+                    ['gpay_upi_enabled', 'Google Pay (GPay UPI Intent)'],
+                    ['paytm_enabled', 'Paytm (UPI / Wallet)'],
                     ['bank_transfer_enabled', 'NEFT / IMPS Bank Transfer'],
                     ['allow_member_staff_contacts', 'Show On-Duty Staff Phone in Member Portal'],
                   ].map(([field, label]) => (
@@ -3386,63 +3334,42 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                 {/* Custom Payment Gateway API Keys Section */}
                 <div className="card" style={{ background: 'var(--bg-subtle)', padding: '1rem', display: 'grid', gap: '1rem' }}>
                   <div>
-                    <h4 style={{ fontSize: '0.96rem' }}>1. Razorpay Payment Gateway Keys (Society Merchant Account)</h4>
+                    <h4 style={{ fontSize: '0.96rem' }}>1. Google Pay, PhonePe & Direct UPI Settings</h4>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                      Enter your society's own Razorpay Key ID, Key Secret, and Webhook Secret for automated online bill collection.
+                      Set your society's official UPI ID to receive maintenance payments directly into your bank via Google Pay, PhonePe, and Paytm.
                     </p>
                   </div>
                   <div className="form-grid">
                     <div className="form-group">
-                      <label>Razorpay Key ID (Public Key)</label>
+                      <label>Society UPI ID (VPA) *</label>
                       <input
                         type="text"
                         className="input"
-                        placeholder="e.g., rzp_live_xxxxxxxxxxxx or rzp_test_xxxxxxxxxxxx"
-                        value={settingsData.settings?.razorpay_key_id || ''}
+                        placeholder="e.g., greenvalley@okaxis or society@okhdfcbank"
+                        value={settingsData.settings?.upi_id || ''}
                         onChange={(e) =>
                           setSettingsData({
                             ...settingsData,
-                            settings: { ...settingsData.settings, razorpay_key_id: e.target.value },
+                            settings: { ...settingsData.settings, upi_id: e.target.value },
                           })
                         }
                       />
                     </div>
                     <div className="form-group">
-                      <label>
-                        Razorpay Key Secret{' '}
-                        {settingsData.settings?.has_razorpay_secret && (
-                          <span className="badge badge-success" style={{ marginLeft: 6 }}>Saved (Encrypted)</span>
-                        )}
-                      </label>
+                      <label>Payee / Merchant Name</label>
                       <input
-                        type="password"
+                        type="text"
                         className="input"
-                        placeholder={settingsData.settings?.has_razorpay_secret ? '•••••••••••••••• (Leave blank to keep existing)' : 'Enter Razorpay Key Secret'}
-                        value={settingsData.settings?.razorpay_key_secret_input || ''}
+                        placeholder="e.g., Green Valley Residents Welfare Association"
+                        value={settingsData.settings?.upi_merchant_name || settingsData.settings?.upi_payee_name || ''}
                         onChange={(e) =>
                           setSettingsData({
                             ...settingsData,
-                            settings: { ...settingsData.settings, razorpay_key_secret_input: e.target.value },
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>
-                        Razorpay Webhook Secret{' '}
-                        {settingsData.settings?.has_razorpay_webhook_secret && (
-                          <span className="badge badge-success" style={{ marginLeft: 6 }}>Saved</span>
-                        )}
-                      </label>
-                      <input
-                        type="password"
-                        className="input"
-                        placeholder={settingsData.settings?.has_razorpay_webhook_secret ? '•••••••••••••••• (Leave blank to keep existing)' : 'Enter Webhook Signing Secret'}
-                        value={settingsData.settings?.razorpay_webhook_secret_input || ''}
-                        onChange={(e) =>
-                          setSettingsData({
-                            ...settingsData,
-                            settings: { ...settingsData.settings, razorpay_webhook_secret_input: e.target.value },
+                            settings: {
+                              ...settingsData.settings,
+                              upi_merchant_name: e.target.value,
+                              upi_payee_name: e.target.value,
+                            },
                           })
                         }
                       />
@@ -3452,7 +3379,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
                     <h4 style={{ fontSize: '0.96rem' }}>2. Paytm & Custom Payment Gateway Credentials</h4>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                      Integrate Paytm Merchant credentials or any custom payment gateway (PhonePe PG, Cashfree, CCAvenue, Stripe).
+                      Integrate Paytm Merchant credentials or custom merchant gateway for automated payment tracking.
                     </p>
                   </div>
                   <div className="form-grid">
@@ -3883,50 +3810,13 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                         </div>
                         {isRenewalDue && (
                           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                            {subSummary?.razorpayEnabled !== false && (
-                              <button
-                                type="button"
-                                className="btn btn-primary btn-sm"
-                                onClick={async () => {
-                                  try {
-                                    await openRazorpayCheckout({
-                                      amountRupees: subSummary.totalAmountDue,
-                                      currency: 'INR',
-                                      receipt: `sub_${currentSociety.id.slice(0, 8)}_${Date.now()}`,
-                                      merchantName: 'SocietyOS Platform Subscription',
-                                      description: `${subSummary.planName} Renewal & Approval — ${currentSociety.name}`,
-                                      prefill: {
-                                        name: user?.fullName || user?.email || currentSociety.name,
-                                        email: user?.email || currentSociety.contact_email,
-                                        contact: user?.phone || currentSociety.contact_phone,
-                                      },
-                                      isSubscription: true,
-                                      societyId: currentSociety.id,
-                                      planId: subSummary.planId,
-                                      subscriptionPaymentId: subSummary.pendingInvoice?.id,
-                                      onSuccess: (verified: any) => {
-                                        notify(
-                                          verified?.message ||
-                                            `Subscription payment of ${formatCurrency(subSummary.totalAmountDue)} verified!`
-                                        );
-                                        refreshCurrentTab();
-                                      },
-                                    });
-                                  } catch (err: any) {
-                                    notify(err.message || 'Subscription checkout failed.', 'error');
-                                  }
-                                }}
-                              >
-                                <CreditCard size={14} /> Pay {formatCurrency(subSummary.totalAmountDue)} & Renew Now
-                              </button>
-                            )}
                             {subSummary?.upiPaymentEnabled !== false && (
                               <button
                                 type="button"
-                                className="btn btn-secondary btn-sm"
+                                className="btn btn-primary btn-sm"
                                 onClick={() => setModal('PAY_SUBSCRIPTION_UPI')}
                               >
-                                <QrCode size={14} /> Pay via UPI / QR
+                                <Smartphone size={14} /> Pay {formatCurrency(subSummary.totalAmountDue)} via UPI (GPay/PhonePe/Paytm)
                               </button>
                             )}
                           </div>

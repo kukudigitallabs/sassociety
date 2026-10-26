@@ -22662,6 +22662,11 @@ async function handleApiRequest(ctx) {
             taxAmount,
             totalAmount,
             currency: "INR",
+            platformUpiId: platform.upi_id || "taxprofessionals97-1@okaxis",
+            platformUpiPayeeName: platform.upi_payee_name || "SocietyOS Platform",
+            platformBankName: platform.bank_name,
+            platformBankAccountNumber: platform.bank_account_number,
+            platformBankIfsc: platform.bank_ifsc,
             razorpayKeyId: platform.razorpay_key_id
           };
         }
@@ -22735,6 +22740,11 @@ async function handleApiRequest(ctx) {
         taxAmount,
         totalAmount,
         currency: "INR",
+        platformUpiId: platform.upi_id || "taxprofessionals97-1@okaxis",
+        platformUpiPayeeName: platform.upi_payee_name || "SocietyOS Platform",
+        platformBankName: platform.bank_name,
+        platformBankAccountNumber: platform.bank_account_number,
+        platformBankIfsc: platform.bank_ifsc,
         razorpayKeyId: platform.razorpay_key_id
       });
     }
@@ -22823,6 +22833,83 @@ async function handleApiRequest(ctx) {
           autoApproved: autoApprove,
           society: updatedSociety,
           message: autoApprove ? "Payment verified! Society subscription is now ACTIVE and APPROVED." : "Payment verified! Society is awaiting manual approval by Super Admin."
+        });
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    }
+    if (pathname === "/api/public/subscription-upi/submit" && method === "POST") {
+      const { orderId, utr, proofUrl } = body;
+      const ref = String(utr || "").trim();
+      if (!ref) {
+        return sendJson(res, 400, { error: "UPI transaction reference / UTR is required." });
+      }
+      const subPayment = db.prepare("SELECT * FROM subscription_payments WHERE gateway_order_id = ? OR id = ?").get(String(orderId || ""), String(orderId || ""));
+      if (!subPayment) {
+        return sendJson(res, 404, { error: "Subscription payment order not found." });
+      }
+      const plan = db.prepare("SELECT * FROM subscription_plans WHERE id = ?").get(subPayment.plan_id);
+      const platform = db.prepare("SELECT * FROM platform_settings LIMIT 1").get();
+      const soc = db.prepare("SELECT * FROM societies WHERE id = ?").get(subPayment.society_id);
+      const autoApprove = Boolean(platform?.auto_approve_paid_societies);
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      const endsIso = new Date(Date.now() + Number(plan?.duration_days || 30) * 864e5).toISOString();
+      const graceEndsIso = new Date(
+        Date.now() + (Number(plan?.duration_days || 30) + Number(plan?.grace_period_days || 7)) * 864e5
+      ).toISOString();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare(`
+          UPDATE subscription_payments
+          SET gateway_payment_id = ?,
+              payment_gateway = 'UPI',
+              receipt_url = COALESCE(?, receipt_url),
+              status = ?,
+              paid_at = CASE WHEN ? = 1 THEN ? ELSE paid_at END
+          WHERE id = ?
+        `).run(
+          ref,
+          proofUrl || null,
+          autoApprove ? "PAID" : "PENDING_APPROVAL",
+          autoApprove ? 1 : 0,
+          nowIso,
+          subPayment.id
+        );
+        if (autoApprove && plan) {
+          const newSubId = uuid();
+          db.prepare(`
+            INSERT INTO society_subscriptions (id, society_id, plan_id, status, starts_at, ends_at, is_trial)
+            VALUES (?, ?, ?, 'ACTIVE', ?, ?, 0)
+          `).run(newSubId, subPayment.society_id, plan.id, nowIso, endsIso);
+          db.prepare(`
+            UPDATE societies
+            SET subscription_plan_id = ?,
+                subscription_status = 'ACTIVE',
+                payment_status = 'PAID',
+                approval_status = 'APPROVED',
+                subscription_starts_at = ?,
+                subscription_ends_at = ?,
+                grace_period_ends_at = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+          `).run(plan.id, nowIso, endsIso, graceEndsIso, subPayment.society_id);
+        } else {
+          db.prepare("UPDATE societies SET payment_status = 'PENDING', updated_at = datetime('now') WHERE id = ?").run(subPayment.society_id);
+        }
+        sendNotification({
+          userId: null,
+          societyId: null,
+          notificationType: "PAYMENT_RECEIVED",
+          title: `New UPI Subscription Payment (${subPayment.invoice_number})`,
+          message: `${soc?.name || "A society"} submitted UPI UTR ${ref} for subscription payment of \u20B9${subPayment.total_amount}.`
+        });
+        db.exec("COMMIT");
+        syncToMysqlAfterWrite();
+        return sendJson(res, 200, {
+          success: true,
+          message: autoApprove ? "Subscription payment verified and society activated!" : "Payment reference submitted successfully. Super Admin will verify and activate your society.",
+          status: autoApprove ? "PAID" : "PENDING_APPROVAL"
         });
       } catch (err) {
         db.exec("ROLLBACK");
@@ -24480,12 +24567,11 @@ async function handleApiRequest(ctx) {
         `).run(subPayId, societyId, targetPlanId, invNo, basePrice, taxAmt, totalAmt, ref, receiptUrl || null, notes || null);
         db.prepare("UPDATE societies SET payment_status = 'PENDING', updated_at = datetime('now') WHERE id = ?").run(societyId);
         sendNotification({
-          userId: "usr_super_admin",
+          userId: null,
           societyId: null,
+          notificationType: "PAYMENT_RECEIVED",
           title: `New Subscription Payment Proof (${invNo})`,
-          message: `${soc?.name || "A society"} submitted UPI payment of \u20B9${totalAmt} (UTR: ${ref}) for verification.`,
-          type: "PAYMENT_RECEIVED",
-          linkUrl: "/super-admin?tab=PAYMENTS"
+          message: `${soc?.name || "A society"} submitted UPI payment of \u20B9${totalAmt} (UTR: ${ref}) for verification.`
         });
         syncToMysqlAfterWrite();
         return sendJson(res, 201, {

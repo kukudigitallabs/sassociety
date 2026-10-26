@@ -640,4 +640,51 @@ describe('SocietyOS SaaS — Comprehensive Acceptance Criteria Suite (Section 22
     assert.equal(Number(dashRes.data.kpis.currentBankBalance), 0);
     assert.equal(Number(dashRes.data.kpis.openComplaints), 0);
   });
+
+  it('AC 17: Society subscription payment submission via UPI (Google Pay / PhonePe / Paytm / BHIM) with UTR reference', async () => {
+    const plansRes = await api('/api/public/plans');
+    const quarterlyPlan = plansRes.data.plans[1] || plansRes.data.plans[0];
+
+    // Register a new society requiring paid subscription
+    const regRes = await api('/api/public/register-society', {
+      method: 'POST',
+      body: {
+        adminName: 'Harpreet Singh Sandhu',
+        email: `admin.upi.${Date.now()}@greencity.com`,
+        phone: '+91-98140-55555',
+        password: 'Password@123',
+        societyName: 'Green City Residency',
+        address: 'Ferozepur Road',
+        city: 'Ludhiana',
+        state: 'Punjab',
+        pincode: '141001',
+        planId: quarterlyPlan.id,
+        startWithTrial: false,
+      },
+    });
+    assert.equal(regRes.status, 201);
+    assert.equal(regRes.data.society.subscription_status, 'PENDING_PAYMENT');
+    const orderId = regRes.data.paymentOrder.orderId;
+    assert.ok(orderId);
+    assert.ok(regRes.data.paymentOrder.platformUpiId);
+
+    // Reject submission without UTR
+    const emptyUtrRes = await api('/api/public/subscription-upi/submit', {
+      method: 'POST',
+      body: { orderId, utr: '' },
+    });
+    assert.equal(emptyUtrRes.status, 400);
+
+    // Submit valid 12-digit UTR reference
+    const submitRes = await api('/api/public/subscription-upi/submit', {
+      method: 'POST',
+      body: {
+        orderId,
+        utr: '425199882201',
+        proofUrl: 'https://society.kukudigitallabs.com/receipts/proof_425199882201.png',
+      },
+    });
+    assert.equal(submitRes.status, 200);
+    assert.ok(submitRes.data.status === 'PAID' || submitRes.data.status === 'PENDING_APPROVAL');
+  });
 });

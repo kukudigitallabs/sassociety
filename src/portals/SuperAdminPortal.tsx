@@ -1100,9 +1100,6 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         defaultGracePeriodDays: Number(settingsForm.default_grace_period_days),
                         autoApprovePaidSocieties: Boolean(settingsForm.auto_approve_paid_societies),
                         autoApproveTrialSocieties: Boolean(settingsForm.auto_approve_trial_societies),
-                        razorpayKeyId: settingsForm.razorpay_key_id,
-                        razorpayKeySecret: settingsForm.razorpay_key_secret || undefined,
-                        razorpayWebhookSecret: settingsForm.razorpay_webhook_secret || undefined,
                         paytmMerchantId: settingsForm.paytm_merchant_id,
                         paytmMerchantKey: settingsForm.paytm_merchant_key || undefined,
                         customGatewayName: settingsForm.custom_gateway_name,
@@ -1113,7 +1110,6 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         bankName: settingsForm.bank_name,
                         bankAccountNumber: settingsForm.bank_account_number,
                         bankIfsc: settingsForm.bank_ifsc,
-                        razorpaySandboxMode: Boolean(settingsForm.razorpay_sandbox_mode),
                         welcomeEmailTemplate: settingsForm.welcome_email_template,
 
                         // Subscription Taxes
@@ -1122,7 +1118,6 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                         subscriptionTaxPercent: Number(settingsForm.subscription_tax_percent ?? 18),
 
                         // Master Payment Gateway Controls
-                        razorpayEnabled: Boolean(settingsForm.razorpay_enabled ?? 1),
                         upiPaymentEnabled: Boolean(settingsForm.upi_payment_enabled ?? 1),
                         paytmEnabled: Boolean(settingsForm.paytm_enabled ?? 0),
                         customGatewayEnabled: Boolean(settingsForm.custom_gateway_enabled ?? 0),
@@ -1150,8 +1145,6 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     notify(res.message);
                     setSettingsForm((prev: any) => ({
                       ...prev,
-                      razorpay_key_secret: '',
-                      razorpay_webhook_secret: '',
                       paytm_merchant_key: '',
                       custom_gateway_secret: '',
                     }));
@@ -1355,79 +1348,11 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     </p>
                   </div>
 
-                  {/* GATEWAY 1: RAZORPAY */}
+                  {/* MASTER GATEWAY: DIRECT UPI QR (Google Pay / PhonePe / Paytm) & BANK TRANSFER */}
                   <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-surface)', marginBottom: '1.25rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
                       <div>
-                        <strong style={{ fontSize: '0.92rem' }}>Gateway 1: Razorpay Online Checkout (Cards / NetBanking / UPI)</strong>
-                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Automated instant subscription activation via webhook</div>
-                      </div>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(settingsForm.razorpay_enabled ?? 1)}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_enabled: e.target.checked ? 1 : 0 })}
-                        />
-                        <span className="toggle-slider"></span>
-                        <span style={{ color: settingsForm.razorpay_enabled ? '#10b981' : '#64748b' }}>
-                          {settingsForm.razorpay_enabled ? 'Razorpay ON (Active)' : 'Razorpay OFF (Disabled)'}
-                        </span>
-                      </label>
-                    </div>
-
-                    <div className="form-grid">
-                      <div className="form-group">
-                        <label>Razorpay Key ID (Public Key)</label>
-                        <input
-                          type="text"
-                          className="input"
-                          placeholder="rzp_live_xxxxxxxxxxxx or rzp_test_xxxxxxxxxxxx"
-                          value={settingsForm.razorpay_key_id || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_key_id: e.target.value })}
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label>
-                          Razorpay Key Secret{' '}
-                          {settingsForm.has_razorpay_secret && (
-                            <span className="badge badge-success" style={{ marginLeft: '0.35rem', fontSize: '0.68rem' }}>
-                              Saved (Encrypted)
-                            </span>
-                          )}
-                        </label>
-                        <input
-                          type="password"
-                          className="input"
-                          placeholder={settingsForm.has_razorpay_secret ? '•••••••••••••••• (Enter new to replace)' : 'Enter Razorpay Key Secret'}
-                          value={settingsForm.razorpay_key_secret || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_key_secret: e.target.value })}
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label>
-                          Razorpay Webhook Secret (Optional){' '}
-                          {settingsForm.has_razorpay_webhook_secret && (
-                            <span className="badge badge-success" style={{ marginLeft: '0.35rem', fontSize: '0.68rem' }}>
-                              Saved
-                            </span>
-                          )}
-                        </label>
-                        <input
-                          type="password"
-                          className="input"
-                          placeholder={settingsForm.has_razorpay_webhook_secret ? '••••••••••••••••' : 'whsec_xxxxxxxxxxxx'}
-                          value={settingsForm.razorpay_webhook_secret || ''}
-                          onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_webhook_secret: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* GATEWAY 2: DIRECT UPI QR & BANK TRANSFER WITH LIVE CARD PREVIEW */}
-                  <div style={{ padding: '1rem', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-surface)', marginBottom: '1.25rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                      <div>
-                        <strong style={{ fontSize: '0.92rem' }}>Gateway 2: Direct UPI QR Code & Bank Transfer</strong>
+                        <strong style={{ fontSize: '0.92rem' }}>Master Payment Gateway: Direct UPI (Google Pay, PhonePe, Paytm) & Bank Transfer</strong>
                         <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Generates dynamic scannable QR card with manual or automated verification</div>
                       </div>
                       <label className="toggle-switch">
@@ -1759,14 +1684,6 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                       />
                       Auto-Approve Societies After Verified Payment
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(settingsForm.razorpay_sandbox_mode)}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, razorpay_sandbox_mode: e.target.checked ? 1 : 0 })}
-                      />
-                      Razorpay Sandbox Mode (Test Transactions)
-                    </label>
                   </div>
                 </div>
 
@@ -1911,7 +1828,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
           <div className="modal-card" style={{ maxWidth: 540 }} onClick={(e) => e.stopPropagation()}>
             <h3>Send Payment Due / Renewal Notice to {selectedSociety.name}</h3>
             <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginTop: 4 }}>
-              This notification will be displayed prominently on the <strong>Society Admin Dashboard</strong> along with the payable subscription amount, days pending to renew, and a direct Razorpay payment button.
+              This notification will be displayed prominently on the <strong>Society Admin Dashboard</strong> along with the payable subscription amount, days pending to renew, and a direct UPI payment button.
             </p>
             <div style={{ display: 'grid', gap: '0.9rem', marginTop: '1rem' }}>
               <div className="form-grid">
@@ -2362,10 +2279,9 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                     value={refundForm.refundGateway}
                     onChange={(e) => setRefundForm({ ...refundForm, refundGateway: e.target.value })}
                   >
-                    <option value="UPI">Direct UPI Transfer</option>
+                    <option value="UPI">Direct UPI Transfer (GPay / PhonePe / Paytm)</option>
                     <option value="BANK_TRANSFER">NEFT / IMPS Bank Transfer</option>
-                    <option value="RAZORPAY">Razorpay Gateway Refund</option>
-                    <option value="PAYTM">Paytm Gateway Refund</option>
+                    <option value="PAYTM">Paytm Transfer</option>
                     <option value="MANUAL_CASH">Cash / Offline Settlement</option>
                   </select>
                 </div>
@@ -2376,7 +2292,7 @@ export const SuperAdminPortal: React.FC<SuperAdminPortalProps> = ({
                 <input
                   type="text"
                   className="input"
-                  placeholder="e.g. UTR 502847291048 or Razorpay rfr_..."
+                  placeholder="e.g. UTR 502847291048 or Bank Ref #..."
                   value={refundForm.refundReference}
                   onChange={(e) => setRefundForm({ ...refundForm, refundReference: e.target.value })}
                 />
