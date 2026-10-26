@@ -15,6 +15,22 @@ export const SubscriptionInvoiceModal: React.FC<SubscriptionInvoiceModalProps> =
 }) => {
   if (!invoice) return null;
 
+  React.useEffect(() => {
+    document.body.classList.add('modal-open');
+    return () => {
+      document.body.classList.remove('modal-open');
+      document.body.classList.remove('print-bill-only');
+    };
+  }, []);
+
+  const handlePrint = () => {
+    document.body.classList.add('print-bill-only');
+    window.print();
+    setTimeout(() => {
+      document.body.classList.remove('print-bill-only');
+    }, 1200);
+  };
+
   const isRefunded = invoice.status === 'REFUNDED';
   const isPaid = invoice.status === 'PAID';
   const isUnpaid = invoice.status === 'CREATED' || invoice.status === 'PENDING_APPROVAL';
@@ -49,11 +65,11 @@ export const SubscriptionInvoiceModal: React.FC<SubscriptionInvoiceModalProps> =
               {isRefunded ? 'Credit Note & Refund Statement' : 'Subscription Tax Invoice'}
             </h3>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <div className="no-print" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => window.print()}
+              onClick={handlePrint}
               title="Print document"
             >
               <Printer size={14} /> Print

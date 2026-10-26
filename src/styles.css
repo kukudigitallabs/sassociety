@@ -842,34 +842,93 @@
 
   /* Print Styles: Clean printable invoices & receipts */
   @media print {
-    .sidebar, .topbar, .no-print, .toast-container, .mobile-menu-btn, .sidebar-backdrop {
-      display: none !important;
+    @page {
+      margin: 10mm 12mm;
+      size: auto;
     }
 
     body {
       background: #ffffff !important;
       color: #000000 !important;
+      font-size: 11pt !important;
     }
 
-    .page-content {
-      padding: 0 !important;
-      max-width: 100% !important;
+    /* Hide non-printable navigation, sidebars, topbars, notifications, buttons */
+    .sidebar,
+    .topbar,
+    .no-print,
+    .toast-container,
+    .mobile-menu-btn,
+    .sidebar-backdrop,
+    .badge-filter {
+      display: none !important;
     }
 
+    /* CRITICAL FIX: When printing any invoice, receipt, or bill modal,
+       HIDE the entire background main-area, page-content, and all underlying tabs.
+       This ensures ONLY the bill/receipt document prints cleanly without background page clutter! */
+    body:has(.modal-backdrop) .main-area,
+    body:has(.modal-backdrop) .page-content,
+    body:has(.modal-backdrop) .app-shell > *:not(.modal-backdrop),
+    .app-shell:has(.modal-backdrop) .main-area,
+    .app-shell:has(.modal-backdrop) .page-content,
+    .app-shell:has(.modal-backdrop) > *:not(.modal-backdrop),
+    body.modal-open .main-area,
+    body.modal-open .page-content,
+    body.modal-open .app-shell > *:not(.modal-backdrop),
+    body.print-bill-only .main-area,
+    body.print-bill-only .page-content,
+    body.print-bill-only .app-shell > *:not(.modal-backdrop) {
+      display: none !important;
+    }
+
+    /* Modal Backdrop in Print: Clean static container filling page */
     .modal-backdrop {
       position: static !important;
+      display: block !important;
       background: transparent !important;
       padding: 0 !important;
+      margin: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
       backdrop-filter: none !important;
-      display: block !important;
+      box-shadow: none !important;
     }
 
+    /* Modal Card in Print: Clean bordered printable invoice/receipt */
     .modal-card {
+      position: static !important;
+      display: block !important;
       box-shadow: none !important;
-      border: none !important;
-      padding: 0 !important;
+      border: 1px solid #cbd5e1 !important;
+      border-radius: 8px !important;
+      padding: 22px !important;
       width: 100% !important;
+      max-width: 100% !important;
+      margin: 0 auto !important;
       max-height: none !important;
+      overflow: visible !important;
+      background: #ffffff !important;
+      color: #0f172a !important;
+      page-break-inside: avoid;
+    }
+
+    .data-table {
+      width: 100% !important;
+      border-collapse: collapse !important;
+    }
+
+    .data-table th,
+    .data-table td {
+      border: 1px solid #cbd5e1 !important;
+      padding: 8px 10px !important;
+      color: #0f172a !important;
+      background: #ffffff !important;
+    }
+
+    .data-table th {
+      background: #f1f5f9 !important;
+      font-weight: 700 !important;
     }
 
     .card {

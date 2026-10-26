@@ -68,6 +68,27 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
   const [selectedBill, setSelectedBill] = useState<any | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
 
+  useEffect(() => {
+    if (modal !== 'NONE') {
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+      document.body.classList.remove('print-bill-only');
+    }
+    return () => {
+      document.body.classList.remove('modal-open');
+      document.body.classList.remove('print-bill-only');
+    };
+  }, [modal]);
+
+  const handlePrintDocument = () => {
+    document.body.classList.add('print-bill-only');
+    window.print();
+    setTimeout(() => {
+      document.body.classList.remove('print-bill-only');
+    }, 1200);
+  };
+
   // Payment Submission Form
   const [payForm, setPayForm] = useState({
     amount: 0,
@@ -1153,7 +1174,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
             </div>
             <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Close</button>
-              <button type="button" className="btn btn-primary" onClick={() => window.print()}>
+              <button type="button" className="btn btn-primary" onClick={handlePrintDocument}>
                 <Printer size={15} /> Print / Save PDF
               </button>
             </div>
@@ -1175,7 +1196,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
             </div>
             <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Close</button>
-              <button type="button" className="btn btn-primary" onClick={() => window.print()}>
+              <button type="button" className="btn btn-primary" onClick={handlePrintDocument}>
                 <Printer size={15} /> Print Receipt
               </button>
             </div>
