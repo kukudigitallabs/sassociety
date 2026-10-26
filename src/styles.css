@@ -576,6 +576,49 @@
     margin-block: 0.75rem;
   }
 
+  /* Printable Bill Card & Table (No scrollbars, 100% width, full columns) */
+  .printable-bill-card {
+    width: min(100%, 780px) !important;
+    max-width: 780px !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    box-sizing: border-box !important;
+  }
+
+  .printable-bill-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    border-collapse: collapse !important;
+    table-layout: fixed !important;
+    margin-bottom: 1rem;
+    font-size: 0.86rem;
+  }
+
+  .printable-bill-table th {
+    background: #0f172a !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    border: 1px solid #0f172a !important;
+    padding: 8px 10px !important;
+  }
+
+  .printable-bill-table td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 8px 10px !important;
+    vertical-align: middle !important;
+    font-size: 0.84rem !important;
+    color: #0f172a !important;
+    background: #ffffff;
+  }
+
+  .printable-bill-table tr:nth-child(even) td {
+    background: #f8fafc;
+  }
+
   .toast-container {
     position: fixed;
     bottom: max(1.25rem, calc(env(safe-area-inset-bottom, 0px) + 0.75rem));
@@ -868,24 +911,38 @@
        HIDE the entire background main-area, page-content, and all underlying tabs.
        Separated into independent rules to ensure cross-browser fault tolerance! */
     body.print-bill-only .main-area,
+    body.print-bill-only .sidebar,
+    body.print-bill-only .topbar,
     body.print-bill-only .page-content,
+    body.print-bill-only .app-shell > .main-area,
+    body.print-bill-only .app-shell > .sidebar,
     body.print-bill-only .app-shell > *:not(.modal-backdrop) {
       display: none !important;
     }
 
     body.modal-open .main-area,
+    body.modal-open .sidebar,
+    body.modal-open .topbar,
     body.modal-open .page-content,
+    body.modal-open .app-shell > .main-area,
+    body.modal-open .app-shell > .sidebar,
     body.modal-open .app-shell > *:not(.modal-backdrop) {
       display: none !important;
     }
 
     body:has(.modal-backdrop) .main-area,
+    body:has(.modal-backdrop) .sidebar,
+    body:has(.modal-backdrop) .topbar,
     body:has(.modal-backdrop) .page-content,
+    body:has(.modal-backdrop) .app-shell > .main-area,
+    body:has(.modal-backdrop) .app-shell > .sidebar,
     body:has(.modal-backdrop) .app-shell > *:not(.modal-backdrop) {
       display: none !important;
     }
 
     .app-shell:has(.modal-backdrop) .main-area,
+    .app-shell:has(.modal-backdrop) .sidebar,
+    .app-shell:has(.modal-backdrop) .topbar,
     .app-shell:has(.modal-backdrop) .page-content,
     .app-shell:has(.modal-backdrop) > *:not(.modal-backdrop) {
       display: none !important;
@@ -922,21 +979,41 @@
       page-break-inside: avoid;
     }
 
-    .data-table {
+    .table-wrap {
+      overflow: visible !important;
       width: 100% !important;
+      max-width: 100% !important;
+      display: block !important;
+      scrollbar-width: none !important;
+    }
+
+    .table-wrap::-webkit-scrollbar {
+      display: none !important;
+    }
+
+    .data-table,
+    .printable-bill-table {
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: 100% !important;
       border-collapse: collapse !important;
+      table-layout: fixed !important;
     }
 
     .data-table th,
-    .data-table td {
+    .data-table td,
+    .printable-bill-table th,
+    .printable-bill-table td {
       border: 1px solid #cbd5e1 !important;
       padding: 8px 10px !important;
       color: #0f172a !important;
       background: #ffffff !important;
     }
 
-    .data-table th {
+    .data-table th,
+    .printable-bill-table th {
       background: #f1f5f9 !important;
+      color: #0f172a !important;
       font-weight: 700 !important;
     }
 

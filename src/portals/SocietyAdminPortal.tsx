@@ -46,7 +46,7 @@ import { type Language, t, formatCurrency } from '../i18n.ts';
 import { UpiQrCard } from '../components/UpiQrCard.tsx';
 import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
 import { SubscriptionInvoiceModal } from '../components/SubscriptionInvoiceModal.tsx';
-import { printInvoiceDocument } from '../utils/invoicePrinter.ts';
+import { printInvoiceDocument, numberToIndianWords } from '../utils/invoicePrinter.ts';
 
 interface SocietyAdminPortalProps {
   user: any;
@@ -266,10 +266,16 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     printInvoiceDocument({
       societyName: currentSociety.name,
       societyAddress: currentSociety.address,
+      societyCity: currentSociety.city,
+      societyState: currentSociety.state,
+      societyPincode: currentSociety.pincode,
       societyRegNo: currentSociety.registration_number,
       societyPhone: currentSociety.contact_phone,
       societyEmail: currentSociety.contact_email,
+      societyUpiId: currentSociety.upi_id,
+      societyUpiName: currentSociety.upi_merchant_name,
       billNumber: selectedInvoice.bill_number,
+      billType: selectedInvoice.bill_type || (selectedInvoice.bill_number?.startsWith('SUPP') ? 'SUPPLEMENTARY' : 'REGULAR'),
       billingMonth: selectedInvoice.billing_month,
       billingYear: selectedInvoice.billing_year,
       invoiceDate: (selectedInvoice.created_at || '').slice(0, 10),
@@ -4892,90 +4898,263 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
       )}
 
       {/* MODAL: PRINTABLE INVOICE */}
-      {modal === 'PRINT_INVOICE' && selectedInvoice && (
-        <div className="modal-backdrop" onClick={() => setModal('NONE')}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div style={{ borderBlockEnd: '2px solid var(--primary)', paddingBottom: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div>
-                <h3>{currentSociety.name}</h3>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{currentSociety.address}</div>
+      {modal === 'PRINT_INVOICE' && selectedInvoice && (() => {
+        const subtotal = Number(selectedInvoice.subtotal_amount || 0);
+        const previousBalance = Number(selectedInvoice.previous_balance || 0);
+        const penalty = Number(selectedInvoice.penalty_amount || 0);
+        const credit = Number(selectedInvoice.credit_amount || 0);
+        const total = Number(selectedInvoice.total_amount || 0);
+        const balance = Number(selectedInvoice.balance_amount ?? total);
+        const paid = Number(selectedInvoice.paid_amount || 0);
+        const billType = selectedInvoice.bill_type || (selectedInvoice.bill_number?.startsWith('SUPP') ? 'SUPPLEMENTARY' : 'REGULAR');
+        const billTypeLabel = billType === 'SUPPLEMENTARY' ? 'Supplementary / Adjustment Bill' : 'Regular Monthly Maintenance Bill';
+
+        const validItems = (selectedInvoice.items || []).filter((it: any) => {
+          const val = Number(it.amount);
+          return !isNaN(val) && Math.abs(val) > 0;
+        });
+
+        interface DisplayRow {
+          head: string;
+          type: string;
+          desc: string;
+          amount: number;
+        }
+
+        const rows: DisplayRow[] = [];
+        if (validItems.length > 0) {
+          validItems.forEach((it: any) => {
+            const isAdj = Boolean(it.is_adjustment) || billType === 'SUPPLEMENTARY';
+            rows.push({
+              head: it.category_name || it.categoryName || 'Maintenance Charge',
+              type: isAdj ? 'Adjustment' : 'Monthly Recurring',
+              desc: it.description || `${it.category_name || 'Charge'} (${selectedInvoice.billing_month}/${selectedInvoice.billing_year})`,
+              amount: Number(it.amount),
+            });
+          });
+        } else {
+          rows.push({
+            head: 'Maintenance Charges',
+            type: 'Monthly Recurring',
+            desc: `Regular Society Maintenance Charges (${selectedInvoice.billing_month}/${selectedInvoice.billing_year})`,
+            amount: subtotal > 0 ? subtotal : total,
+          });
+        }
+
+        if (previousBalance > 0) {
+          rows.push({
+            head: 'Arrears / Previous Dues',
+            type: 'Arrears Balance',
+            desc: 'Unpaid dues brought forward from previous billing cycles',
+            amount: previousBalance,
+          });
+        }
+
+        if (penalty > 0) {
+          rows.push({
+            head: 'Late Fee / Surcharge',
+            type: 'Penalty',
+            desc: 'Late payment penalty surcharge',
+            amount: penalty,
+          });
+        }
+
+        if (credit > 0) {
+          rows.push({
+            head: 'Credit / Rebate',
+            type: 'Concession / Credit',
+            desc: 'Advance payment or adjustment rebate',
+            amount: -credit,
+          });
+        }
+
+        const fullSocietyAddress = [
+          currentSociety.address,
+          currentSociety.city,
+          currentSociety.state,
+          currentSociety.pincode ? `PIN: ${currentSociety.pincode}` : '',
+        ].filter(Boolean).join(', ');
+
+        const statusColor = selectedInvoice.status === 'PAID' ? 'var(--success)' : selectedInvoice.status === 'PARTIALLY_PAID' ? '#d97706' : 'var(--danger)';
+        const statusBg = selectedInvoice.status === 'PAID' ? 'rgba(22, 163, 74, 0.12)' : selectedInvoice.status === 'PARTIALLY_PAID' ? 'rgba(217, 119, 6, 0.12)' : 'rgba(220, 38, 38, 0.12)';
+
+        return (
+          <div className="modal-backdrop" onClick={() => setModal('NONE')}>
+            <div className="modal-card printable-bill-card" style={{ width: 'min(100%, 780px)', maxWidth: '780px', padding: '1.5rem', background: '#fff', color: '#0f172a' }} onClick={(e) => e.stopPropagation()}>
+              
+              {/* SOCIETY LETTERHEAD & INVOICE META */}
+              <div style={{ borderBottom: '2.5px solid #047857', paddingBottom: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div style={{ flex: '1 1 300px' }}>
+                  <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '-0.01em' }}>{currentSociety.name}</h2>
+                  <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: '2px', lineHeight: 1.35 }}>{fullSocietyAddress || 'Residential Welfare Association'}</div>
+                  {currentSociety.registration_number && (
+                    <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '2px' }}>Registration #: <strong>{currentSociety.registration_number}</strong></div>
+                  )}
+                  {(currentSociety.contact_phone || currentSociety.contact_email) && (
+                    <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '1px' }}>
+                      {[currentSociety.contact_phone, currentSociety.contact_email].filter(Boolean).join(' • ')}
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'end', flex: '0 0 auto' }}>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#047857', letterSpacing: '-0.01em' }}>INVOICE #{selectedInvoice.bill_number}</div>
+                  <div style={{ display: 'inline-block', padding: '2px 8px', background: '#f1f5f9', color: '#334155', fontSize: '0.74rem', fontWeight: 700, borderRadius: 4, textTransform: 'uppercase', marginTop: '3px' }}>
+                    {billTypeLabel}
+                  </div>
+                  <div style={{ fontSize: '0.82rem', color: '#475569', marginTop: '4px' }}>
+                    Billing Period: <strong>{selectedInvoice.billing_month}/{selectedInvoice.billing_year}</strong>
+                  </div>
+                  <div style={{ fontSize: '0.82rem', color: '#475569' }}>
+                    Bill Date: <strong>{(selectedInvoice.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10)}</strong>
+                  </div>
+                </div>
               </div>
-              <div style={{ textAlign: 'end' }}>
-                <div style={{ fontWeight: 800 }}>INVOICE #{selectedInvoice.bill_number}</div>
-                <div style={{ fontSize: '0.8rem' }}>Period: {selectedInvoice.billing_month}/{selectedInvoice.billing_year}</div>
+
+              {/* BILLED TO & STATUS BOX */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '0.75rem 1rem', marginBottom: '1.25rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Billed Resident / Flat:</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
+                    Flat {selectedInvoice.flat_number}{selectedInvoice.block_name ? ` (${selectedInvoice.block_name})` : ''}
+                  </div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#334155', marginTop: '2px' }}>
+                    {selectedInvoice.member_name || selectedInvoice.primary_member_name || 'Resident Member'}
+                  </div>
+                  {selectedInvoice.member_phone && (
+                    <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '1px' }}>Phone: {selectedInvoice.member_phone}</div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'end' }}>
+                  <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Due Date:</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#dc2626', marginTop: '2px' }}>
+                    {selectedInvoice.due_date}
+                  </div>
+                  <div style={{ marginTop: '4px' }}>
+                    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: '0.76rem', fontWeight: 800, background: statusBg, color: statusColor, border: `1px solid ${statusColor}` }}>
+                      {selectedInvoice.status}
+                    </span>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div style={{ marginBottom: '1rem', fontSize: '0.88rem' }}>
-              <strong>Billed To:</strong> Flat {selectedInvoice.flat_number} ({selectedInvoice.member_name || 'Resident'}) • Due Date: <strong>{selectedInvoice.due_date}</strong>
-            </div>
-            <div className="table-wrap">
-              <table className="data-table" style={{ marginBottom: '1rem', width: '100%', tableLayout: 'fixed' }}>
-                <thead>
-                  <tr>
-                    <th style={{ width: '28%', textAlign: 'left' }}>Charge Head</th>
-                    <th style={{ width: '50%', textAlign: 'left' }}>Description</th>
-                    <th style={{ width: '22%', textAlign: 'right' }}>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(() => {
-                    const validItems = (selectedInvoice.items || []).filter((it: any) => Math.abs(Number(it.amount)) > 0);
-                    return (
-                      <>
-                        {validItems.length > 0 ? (
-                          validItems.map((it: any) => (
-                            <tr key={it.id || `${it.category_name}-${it.amount}`}>
-                              <td style={{ fontWeight: 600, wordBreak: 'break-word' }}>{it.category_name || 'Maintenance Charge'}</td>
-                              <td style={{ color: 'var(--text-muted)', wordBreak: 'break-word' }}>{it.description}</td>
-                              <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatCurrency(it.amount)}</td>
-                            </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td style={{ fontWeight: 600 }}>Maintenance Charges</td>
-                            <td style={{ color: 'var(--text-muted)' }}>Monthly Regular Society Maintenance ({selectedInvoice.billing_month}/{selectedInvoice.billing_year})</td>
-                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(selectedInvoice.subtotal_amount || selectedInvoice.total_amount)}</td>
-                          </tr>
-                        )}
-                        {Number(selectedInvoice.previous_balance) > 0 && (
-                          <tr>
-                            <td style={{ fontWeight: 600 }}>Arrears / Previous Dues</td>
-                            <td style={{ color: 'var(--text-muted)' }}>Unpaid dues brought forward from previous billing periods</td>
-                            <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--danger)' }}>{formatCurrency(selectedInvoice.previous_balance)}</td>
-                          </tr>
-                        )}
-                        {Number(selectedInvoice.penalty_amount) > 0 && (
-                          <tr>
-                            <td style={{ fontWeight: 600 }}>Late Fee / Penalty</td>
-                            <td style={{ color: 'var(--text-muted)' }}>Late payment fee applied</td>
-                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(selectedInvoice.penalty_amount)}</td>
-                          </tr>
-                        )}
-                        {Number(selectedInvoice.credit_amount) > 0 && (
-                          <tr>
-                            <td style={{ fontWeight: 600 }}>Credit / Rebate</td>
-                            <td style={{ color: 'var(--text-muted)' }}>Advance or credit concession adjustment</td>
-                            <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--success)' }}>-{formatCurrency(selectedInvoice.credit_amount)}</td>
-                          </tr>
-                        )}
-                      </>
-                    );
-                  })()}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ textAlign: 'end', fontSize: '1.1rem', fontWeight: 800 }}>
-              Total Payable: {formatCurrency(selectedInvoice.total_amount)} (Balance: {formatCurrency(selectedInvoice.balance_amount)})
-            </div>
-            <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Close</button>
-              <button type="button" className="btn btn-primary" onClick={handlePrintCurrentInvoice}>
-                <Printer size={15} /> Print / Download PDF
-              </button>
+
+              {/* ITEMIZED 5-COLUMN TABLE */}
+              <div style={{ width: '100%', overflow: 'visible', marginBottom: '1.25rem' }}>
+                <table className="printable-bill-table" style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: '6%', textAlign: 'center' }}>#</th>
+                      <th style={{ width: '24%', textAlign: 'left' }}>Charge Head</th>
+                      <th style={{ width: '18%', textAlign: 'left' }}>Type</th>
+                      <th style={{ width: '34%', textAlign: 'left' }}>Description</th>
+                      <th style={{ width: '18%', textAlign: 'right' }}>Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, idx) => (
+                      <tr key={idx} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
+                        <td style={{ padding: '8px 10px', border: '1px solid #cbd5e1', fontSize: '0.82rem', textAlign: 'center', color: '#64748b' }}>{idx + 1}</td>
+                        <td style={{ padding: '8px 10px', border: '1px solid #cbd5e1', fontWeight: 700, fontSize: '0.86rem', color: '#0f172a', wordBreak: 'break-word' }}>{r.head}</td>
+                        <td style={{ padding: '8px 10px', border: '1px solid #cbd5e1', fontSize: '0.82rem', color: '#475569', wordBreak: 'break-word' }}>{r.type}</td>
+                        <td style={{ padding: '8px 10px', border: '1px solid #cbd5e1', fontSize: '0.82rem', color: '#334155', wordBreak: 'break-word' }}>{r.desc}</td>
+                        <td style={{ padding: '8px 10px', border: '1px solid #cbd5e1', textAlign: 'right', fontWeight: 700, fontSize: '0.88rem', whiteSpace: 'nowrap', color: r.amount < 0 ? '#16a34a' : '#0f172a' }}>
+                          {r.amount < 0 ? '-' : ''}{formatCurrency(Math.abs(r.amount))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* SUMMARY: AMOUNT IN WORDS + TOTALS */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
+                <div style={{ flex: '1 1 320px' }}>
+                  <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '0.75rem 1rem' }}>
+                    <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Amount in Words:</div>
+                    <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a', marginTop: '2px', fontStyle: 'italic' }}>
+                      {numberToIndianWords(total)}
+                    </div>
+                  </div>
+                  {currentSociety.upi_id && (
+                    <div style={{ marginTop: '0.5rem', background: '#f0fdf4', border: '1px dashed #047857', borderRadius: '6px', padding: '0.6rem 0.85rem', fontSize: '0.78rem', color: '#14532d' }}>
+                      <strong>Pay via UPI:</strong> <code>{currentSociety.upi_id}</code>{currentSociety.upi_merchant_name ? ` (${currentSociety.upi_merchant_name})` : ''}
+                      <div style={{ fontSize: '0.72rem', color: '#166534', marginTop: '2px' }}>
+                        Please mention Bill #{selectedInvoice.bill_number} & Flat {selectedInvoice.flat_number} in payment notes.
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ flex: '0 1 280px', width: '100%', minWidth: '240px' }}>
+                  <div style={{ border: '1px solid #cbd5e1', borderRadius: '6px', background: '#f8fafc', padding: '0.6rem 0.85rem' }}>
+                    {subtotal > 0 && (previousBalance > 0 || penalty > 0 || credit > 0) && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.82rem', color: '#475569' }}>
+                        <span>Subtotal:</span>
+                        <span style={{ fontWeight: 600 }}>{formatCurrency(subtotal)}</span>
+                      </div>
+                    )}
+                    {previousBalance > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.82rem', color: '#dc2626' }}>
+                        <span>Arrears / Prior Balance:</span>
+                        <span style={{ fontWeight: 600 }}>+{formatCurrency(previousBalance)}</span>
+                      </div>
+                    )}
+                    {penalty > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.82rem', color: '#dc2626' }}>
+                        <span>Late Fee / Penalty:</span>
+                        <span style={{ fontWeight: 600 }}>+{formatCurrency(penalty)}</span>
+                      </div>
+                    )}
+                    {credit > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.82rem', color: '#16a34a' }}>
+                        <span>Credit / Rebate:</span>
+                        <span style={{ fontWeight: 600 }}>-{formatCurrency(credit)}</span>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #0f172a', marginTop: '4px', paddingTop: '4px', fontSize: '0.95rem', fontWeight: 800, color: '#0f172a' }}>
+                      <span>Total Payable:</span>
+                      <span>{formatCurrency(total)}</span>
+                    </div>
+                    {paid > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '0.82rem', color: '#16a34a' }}>
+                        <span>Amount Paid:</span>
+                        <span>-{formatCurrency(paid)}</span>
+                      </div>
+                    )}
+                    {balance !== total && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px', fontWeight: 800, fontSize: '0.86rem', color: balance > 0 ? '#dc2626' : '#166534' }}>
+                        <span>Balance Due:</span>
+                        <span>{formatCurrency(balance)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* FOOTER SIGNATORY & COMPUTER GENERATED NOTICE */}
+              <div style={{ borderTop: '1px solid #cbd5e1', paddingTop: '0.75rem', marginTop: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.74rem', color: '#64748b' }}>
+                <div>
+                  <div>This is a computer-generated invoice issued by <strong>{currentSociety.name}</strong>.</div>
+                  <div style={{ marginTop: '1px' }}>No physical signature is required. Generated on {new Date().toISOString().slice(0, 10)}.</div>
+                </div>
+                <div style={{ textAlign: 'end' }}>
+                  <div style={{ fontWeight: 700, color: '#0f172a' }}>For {currentSociety.name}</div>
+                  <div style={{ marginTop: '1.25rem', borderTop: '1px solid #475569', display: 'inline-block', paddingTop: '2px', fontWeight: 600 }}>
+                    Authorized Signatory / Treasurer
+                  </div>
+                </div>
+              </div>
+
+              {/* MODAL ACTION BUTTONS (NO-PRINT) */}
+              <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.25rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Close</button>
+                <button type="button" className="btn btn-primary" onClick={handlePrintCurrentInvoice}>
+                  <Printer size={15} /> Print / Download PDF
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* MODAL: PRINTABLE RECEIPT */}
       {modal === 'PRINT_RECEIPT' && selectedReceipt && (

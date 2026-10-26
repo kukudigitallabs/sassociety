@@ -6,15 +6,22 @@ export interface PrintableBillItem {
   category_name?: string;
   description: string;
   amount: number | string;
+  is_adjustment?: number | boolean;
 }
 
 export interface PrintableBillData {
   societyName: string;
   societyAddress?: string;
+  societyCity?: string;
+  societyState?: string;
+  societyPincode?: string;
   societyRegNo?: string;
   societyPhone?: string;
   societyEmail?: string;
+  societyUpiId?: string;
+  societyUpiName?: string;
   billNumber: string;
+  billType?: string;
   billingMonth: number | string;
   billingYear: number | string;
   invoiceDate?: string;
@@ -34,6 +41,49 @@ export interface PrintableBillData {
   balanceAmount: number | string;
 }
 
+export function numberToIndianWords(num: number): string {
+  const n = Math.round(Number(num || 0));
+  if (n === 0) return 'Rupees Zero Only';
+  if (n < 0) return 'Minus ' + numberToIndianWords(Math.abs(n));
+
+  const a = [
+    '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+    'Seventeen', 'Eighteen', 'Nineteen',
+  ];
+  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+  function convertLessThanOneThousand(val: number): string {
+    let str = '';
+    if (val >= 100) {
+      str += a[Math.floor(val / 100)] + ' Hundred ';
+      val %= 100;
+    }
+    if (val >= 20) {
+      str += b[Math.floor(val / 20)] + (val % 20 > 0 ? ' ' + a[val % 20] : '');
+    } else if (val > 0) {
+      str += a[val];
+    }
+    return str.trim();
+  }
+
+  let result = '';
+  const crore = Math.floor(n / 10000000);
+  let rem = n % 10000000;
+  const lakh = Math.floor(rem / 100000);
+  rem %= 100000;
+  const thousand = Math.floor(rem / 1000);
+  rem %= 1000;
+  const remainder = rem;
+
+  if (crore > 0) result += convertLessThanOneThousand(crore) + ' Crore ';
+  if (lakh > 0) result += convertLessThanOneThousand(lakh) + ' Lakh ';
+  if (thousand > 0) result += convertLessThanOneThousand(thousand) + ' Thousand ';
+  if (remainder > 0) result += convertLessThanOneThousand(remainder);
+
+  return 'Rupees ' + result.trim() + ' Only';
+}
+
 export function generateInvoiceHtml(data: PrintableBillData): string {
   const subtotal = Number(data.subtotalAmount || 0);
   const previousBalance = Number(data.previousBalance || 0);
@@ -41,19 +91,34 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
   const credit = Number(data.creditAmount || 0);
   const total = Number(data.totalAmount || 0);
   const balance = Number(data.balanceAmount ?? total);
+  const paid = Number(data.paidAmount || 0);
 
-  // Filter out any 0-amount items so zero opening balance does not waste space
+  const billTypeLabel =
+    data.billType === 'SUPPLEMENTARY'
+      ? 'Supplementary / Adjustment Bill'
+      : 'Regular Monthly Maintenance Bill';
+
+  // Filter out any 0-amount items
   const rawItems = (data.items || []).filter((it) => {
     const val = Number(it.amount);
     return !isNaN(val) && Math.abs(val) > 0;
   });
 
-  const rows: Array<{ head: string; desc: string; amount: number }> = [];
+  interface ItemRow {
+    head: string;
+    type: string;
+    desc: string;
+    amount: number;
+  }
+
+  const rows: ItemRow[] = [];
 
   if (rawItems.length > 0) {
     for (const it of rawItems) {
+      const isAdj = Boolean(it.is_adjustment) || data.billType === 'SUPPLEMENTARY';
       rows.push({
         head: it.category_name || it.categoryName || 'Maintenance Charge',
+        type: isAdj ? 'Adjustment' : 'Monthly Recurring',
         desc: it.description || `${it.category_name || 'Charge'} (${data.billingMonth}/${data.billingYear})`,
         amount: Number(it.amount),
       });
@@ -61,7 +126,8 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
   } else {
     rows.push({
       head: 'Maintenance Charges',
-      desc: `Monthly Regular Society Maintenance (${data.billingMonth}/${data.billingYear})`,
+      type: 'Monthly Recurring',
+      desc: `Regular Society Maintenance Charges (${data.billingMonth}/${data.billingYear})`,
       amount: subtotal > 0 ? subtotal : total,
     });
   }
@@ -69,15 +135,17 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
   if (previousBalance > 0) {
     rows.push({
       head: 'Arrears / Previous Dues',
-      desc: 'Unpaid dues brought forward from previous billing periods',
+      type: 'Arrears Balance',
+      desc: 'Unpaid dues brought forward from previous billing cycles',
       amount: previousBalance,
     });
   }
 
   if (penalty > 0) {
     rows.push({
-      head: 'Late Fee / Penalty',
-      desc: 'Late payment surcharge applied',
+      head: 'Late Fee / Surcharge',
+      type: 'Penalty',
+      desc: 'Late payment penalty surcharge',
       amount: penalty,
     });
   }
@@ -85,27 +153,39 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
   if (credit > 0) {
     rows.push({
       head: 'Credit / Rebate',
-      desc: 'Advance or credit concession adjustment',
+      type: 'Concession / Credit',
+      desc: 'Advance payment or adjustment rebate',
       amount: -credit,
     });
   }
+
+  const fullAddress = [
+    data.societyAddress,
+    data.societyCity,
+    data.societyState,
+    data.societyPincode ? `PIN: ${data.societyPincode}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  const statusColor = data.status === 'PAID' ? '#166534' : data.status === 'PARTIALLY_PAID' ? '#b45309' : '#b91c1c';
+  const statusBg = data.status === 'PAID' ? '#dcfce7' : data.status === 'PARTIALLY_PAID' ? '#fef3c7' : '#fee2e2';
 
   const tableRowsHtml = rows
     .map(
       (r, idx) => `
     <tr style="background: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
-      <td style="padding: 10px 12px; border: 1px solid #cbd5e1; font-weight: 600; font-size: 13px; color: #0f172a;">${r.head}</td>
-      <td style="padding: 10px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; color: #334155;">${r.desc}</td>
-      <td style="padding: 10px 12px; border: 1px solid #cbd5e1; text-align: right; font-weight: 600; font-size: 13px; white-space: nowrap; color: ${r.amount < 0 ? '#16a34a' : '#0f172a'};">
+      <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; text-align: center; color: #64748b;">${idx + 1}</td>
+      <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 700; font-size: 12.5px; color: #0f172a; word-break: break-word;">${r.head}</td>
+      <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569; word-break: break-word;">${r.type}</td>
+      <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #334155; word-break: break-word;">${r.desc}</td>
+      <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: right; font-weight: 700; font-size: 13px; white-space: nowrap; color: ${r.amount < 0 ? '#16a34a' : '#0f172a'};">
         ${r.amount < 0 ? '-' : ''}${formatCurrency(Math.abs(r.amount))}
       </td>
     </tr>
   `
     )
     .join('');
-
-  const statusColor = data.status === 'PAID' ? '#166534' : data.status === 'PARTIALLY_PAID' ? '#b45309' : '#b91c1c';
-  const statusBg = data.status === 'PAID' ? '#dcfce7' : data.status === 'PARTIALLY_PAID' ? '#fef3c7' : '#fee2e2';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -116,7 +196,7 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
   <style>
     @page {
       size: A4 portrait;
-      margin: 12mm 15mm;
+      margin: 10mm 12mm;
     }
     *, *::before, *::after {
       box-sizing: border-box;
@@ -127,18 +207,18 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       background: #ffffff;
       color: #0f172a;
-      padding: 20px;
-      font-size: 13px;
-      line-height: 1.45;
+      padding: 16px;
+      font-size: 12.5px;
+      line-height: 1.4;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
     .invoice-card {
-      max-width: 760px;
+      max-width: 780px;
       margin: 0 auto;
-      border: 1.5px solid #cbd5e1;
-      border-radius: 8px;
-      padding: 26px 30px;
+      border: 1.5px solid #0f172a;
+      border-radius: 6px;
+      padding: 20px 24px;
       background: #ffffff;
       page-break-inside: avoid;
     }
@@ -146,130 +226,136 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
       width: 100%;
       border-collapse: collapse;
       border-bottom: 2.5px solid #047857;
-      padding-bottom: 14px;
-      margin-bottom: 16px;
+      padding-bottom: 12px;
+      margin-bottom: 14px;
     }
     .header-table td {
       vertical-align: top;
-      padding-bottom: 12px;
+      padding-bottom: 8px;
     }
     .society-title {
       font-size: 22px;
       font-weight: 800;
       color: #0f172a;
       letter-spacing: -0.02em;
-      line-height: 1.2;
+      text-transform: uppercase;
     }
-    .society-address {
-      font-size: 12px;
+    .society-meta {
+      font-size: 11.5px;
       color: #475569;
-      margin-top: 4px;
+      margin-top: 3px;
+      line-height: 1.35;
     }
-    .society-reg {
-      font-size: 11px;
-      color: #64748b;
-      margin-top: 2px;
+    .bill-title-box {
+      text-align: right;
     }
-    .invoice-tag {
-      font-size: 16px;
+    .bill-tag {
+      font-size: 15px;
       font-weight: 800;
       color: #047857;
       letter-spacing: -0.01em;
-      text-align: right;
     }
-    .invoice-period {
-      font-size: 12px;
-      color: #334155;
-      margin-top: 3px;
-      text-align: right;
-    }
-    .invoice-date {
-      font-size: 11.5px;
-      color: #64748b;
-      margin-top: 2px;
-      text-align: right;
-    }
-    .meta-card {
-      width: 100%;
-      border-collapse: collapse;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      margin-bottom: 16px;
-    }
-    .meta-card td {
-      padding: 10px 14px;
-      font-size: 12.5px;
-      vertical-align: middle;
-    }
-    .items-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 16px;
-      table-layout: fixed;
-    }
-    .items-table th {
+    .bill-badge {
+      display: inline-block;
+      padding: 2px 7px;
       background: #f1f5f9;
       color: #334155;
+      font-size: 10.5px;
       font-weight: 700;
-      font-size: 12px;
+      border-radius: 4px;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      border: 1px solid #cbd5e1;
-      padding: 10px 12px;
-      text-align: left;
+      margin-top: 3px;
     }
-    .totals-area {
+    .resident-card {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 8px;
-      margin-bottom: 20px;
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      margin-bottom: 14px;
     }
-    .totals-area td {
-      padding: 6px 10px;
-      font-size: 13px;
+    .resident-card td {
+      padding: 8px 12px;
+      font-size: 12px;
+      vertical-align: top;
+    }
+    .bill-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      margin-bottom: 12px;
+    }
+    .bill-table th {
+      background: #0f172a;
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border: 1px solid #0f172a;
+      padding: 7px 10px;
+    }
+    .bill-table td {
+      border: 1px solid #cbd5e1;
+      padding: 7px 10px;
+      vertical-align: middle;
+    }
+    .summary-area {
+      display: table;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+    .summary-col-words {
+      display: table-cell;
+      width: 55%;
+      vertical-align: top;
+      padding-right: 15px;
+    }
+    .summary-col-totals {
+      display: table-cell;
+      width: 45%;
+      vertical-align: top;
     }
     .totals-box {
-      float: right;
-      width: 320px;
       border: 1px solid #cbd5e1;
       border-radius: 6px;
       background: #f8fafc;
-      padding: 10px 14px;
+      padding: 8px 12px;
     }
-    .totals-line {
+    .totals-row {
       display: flex;
       justify-content: space-between;
-      font-size: 12.5px;
-      padding: 3px 0;
+      padding: 2px 0;
+      font-size: 12px;
     }
-    .totals-line.grand {
+    .totals-row.grand {
       border-top: 2px solid #0f172a;
-      margin-top: 6px;
-      padding-top: 8px;
-      font-size: 15px;
+      margin-top: 5px;
+      padding-top: 6px;
+      font-size: 14px;
       font-weight: 800;
       color: #0f172a;
     }
-    .badge {
-      display: inline-block;
-      padding: 3px 9px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+    .upi-box {
+      border: 1px dashed #047857;
+      background: #f0fdf4;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 11.5px;
+      color: #14532d;
+      margin-bottom: 14px;
     }
-    .footer-note {
-      clear: both;
-      border-top: 1px dashed #cbd5e1;
-      padding-top: 12px;
-      margin-top: 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      color: #64748b;
+    .footer-sign-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid #cbd5e1;
+    }
+    .footer-sign-table td {
+      vertical-align: bottom;
       font-size: 11px;
+      color: #64748b;
     }
     @media print {
       body {
@@ -277,13 +363,10 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
         background: transparent;
       }
       .invoice-card {
-        border: 1px solid #94a3b8;
-        padding: 20px;
+        border: 1.5px solid #0f172a;
+        padding: 16px 20px;
         margin: 0;
         max-width: 100%;
-      }
-      .no-print {
-        display: none !important;
       }
     }
   </style>
@@ -292,30 +375,40 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
   <div class="invoice-card">
     <table class="header-table">
       <tr>
-        <td style="width: 60%;">
+        <td style="width: 58%;">
           <div class="society-title">${data.societyName}</div>
-          ${data.societyAddress ? `<div class="society-address">${data.societyAddress}</div>` : ''}
-          ${data.societyRegNo ? `<div class="society-reg">Registration #: <strong>${data.societyRegNo}</strong></div>` : ''}
-          ${data.societyPhone || data.societyEmail ? `<div class="society-reg">${[data.societyPhone, data.societyEmail].filter(Boolean).join(' • ')}</div>` : ''}
+          <div class="society-meta">${fullAddress || 'Residential Welfare Association'}</div>
+          ${data.societyRegNo ? `<div class="society-meta">Registration #: <strong>${data.societyRegNo}</strong></div>` : ''}
+          ${data.societyPhone || data.societyEmail ? `<div class="society-meta">${[data.societyPhone, data.societyEmail].filter(Boolean).join(' • ')}</div>` : ''}
         </td>
-        <td style="width: 40%; text-align: right;">
-          <div class="invoice-tag">INVOICE #${data.billNumber}</div>
-          <div class="invoice-period">Billing Period: <strong>${data.billingMonth}/${data.billingYear}</strong></div>
-          <div class="invoice-date">Issue Date: <strong>${data.invoiceDate || new Date().toISOString().slice(0, 10)}</strong></div>
+        <td style="width: 42%; text-align: right;">
+          <div class="bill-tag">INVOICE #${data.billNumber}</div>
+          <div class="bill-badge">${billTypeLabel}</div>
+          <div class="society-meta" style="margin-top: 4px;">Billing Period: <strong>${data.billingMonth}/${data.billingYear}</strong></div>
+          <div class="society-meta">Bill Date: <strong>${data.invoiceDate || new Date().toISOString().slice(0, 10)}</strong></div>
         </td>
       </tr>
     </table>
 
-    <table class="meta-card">
+    <table class="resident-card">
       <tr>
-        <td style="width: 65%;">
-          <div><strong>Billed To:</strong> Flat <strong>${data.flatNumber}</strong>${data.blockName ? ` (${data.blockName})` : ''}</div>
-          <div style="color: #475569; margin-top: 2px;">Resident: <strong>${data.memberName || 'Resident Member'}</strong>${data.memberPhone ? ` • ${data.memberPhone}` : ''}</div>
+        <td style="width: 60%; border-right: 1px solid #e2e8f0;">
+          <div style="font-size: 10.5px; text-transform: uppercase; color: #64748b; font-weight: 700;">Billed Resident / Flat:</div>
+          <div style="font-size: 14px; font-weight: 800; color: #0f172a; margin-top: 2px;">
+            Flat ${data.flatNumber}${data.blockName ? ` (${data.blockName})` : ''}
+          </div>
+          <div style="font-size: 12.5px; font-weight: 600; color: #334155; margin-top: 2px;">
+            ${data.memberName || 'Resident Member'}
+          </div>
+          ${data.memberPhone ? `<div style="font-size: 11.5px; color: #64748b; margin-top: 1px;">Phone: ${data.memberPhone}</div>` : ''}
         </td>
-        <td style="width: 35%; text-align: right;">
-          <div><strong>Due Date:</strong> <span style="color: #dc2626; font-weight: 700;">${data.dueDate}</span></div>
+        <td style="width: 40%; text-align: right;">
+          <div style="font-size: 10.5px; text-transform: uppercase; color: #64748b; font-weight: 700;">Due Date & Status:</div>
+          <div style="font-size: 14px; font-weight: 800; color: #dc2626; margin-top: 2px;">
+            ${data.dueDate}
+          </div>
           <div style="margin-top: 4px;">
-            <span class="badge" style="background: ${statusBg}; color: ${statusColor};">
+            <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 800; background: ${statusBg}; color: ${statusColor}; border: 1px solid ${statusColor};">
               ${data.status}
             </span>
           </div>
@@ -323,12 +416,14 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
       </tr>
     </table>
 
-    <table class="items-table">
+    <table class="bill-table">
       <thead>
         <tr>
-          <th style="width: 28%;">Charge Head</th>
-          <th style="width: 50%;">Description</th>
-          <th style="width: 22%; text-align: right;">Amount</th>
+          <th style="width: 6%; text-align: center;">#</th>
+          <th style="width: 24%; text-align: left;">Charge Head</th>
+          <th style="width: 16%; text-align: left;">Type</th>
+          <th style="width: 36%; text-align: left;">Description</th>
+          <th style="width: 18%; text-align: right;">Amount (₹)</th>
         </tr>
       </thead>
       <tbody>
@@ -336,53 +431,84 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
       </tbody>
     </table>
 
-    <div style="overflow: hidden; margin-bottom: 12px;">
-      <div class="totals-box">
-        ${subtotal > 0 && (previousBalance > 0 || penalty > 0 || credit > 0) ? `
-          <div class="totals-line">
-            <span style="color: #475569;">Subtotal (Current Month):</span>
-            <span style="font-weight: 600;">${formatCurrency(subtotal)}</span>
+    <div class="summary-area">
+      <div class="summary-col-words">
+        <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 12px;">
+          <div style="font-size: 10.5px; text-transform: uppercase; color: #64748b; font-weight: 700;">Amount in Words:</div>
+          <div style="font-size: 12px; font-weight: 700; color: #0f172a; margin-top: 2px; font-style: italic;">
+            ${numberToIndianWords(total)}
           </div>
-        ` : ''}
-        ${previousBalance > 0 ? `
-          <div class="totals-line">
-            <span style="color: #475569;">Arrears / Prior Balance:</span>
-            <span style="font-weight: 600; color: #dc2626;">+${formatCurrency(previousBalance)}</span>
-          </div>
-        ` : ''}
-        ${penalty > 0 ? `
-          <div class="totals-line">
-            <span style="color: #475569;">Late Fee / Surcharge:</span>
-            <span style="font-weight: 600;">+${formatCurrency(penalty)}</span>
-          </div>
-        ` : ''}
-        ${credit > 0 ? `
-          <div class="totals-line">
-            <span style="color: #475569;">Credit / Rebate:</span>
-            <span style="font-weight: 600; color: #16a34a;">-${formatCurrency(credit)}</span>
-          </div>
-        ` : ''}
-        <div class="totals-line grand">
-          <span>Total Payable:</span>
-          <span>${formatCurrency(total)}</span>
         </div>
-        ${balance !== total ? `
-          <div class="totals-line" style="margin-top: 4px; font-weight: 700; color: #dc2626;">
-            <span>Balance Due:</span>
-            <span>${formatCurrency(balance)}</span>
+        ${data.societyUpiId ? `
+          <div class="upi-box" style="margin-top: 8px;">
+            <strong>Pay via UPI:</strong> <code>${data.societyUpiId}</code>${data.societyUpiName ? ` (${data.societyUpiName})` : ''}
+            <div style="font-size: 10.5px; color: #166534; margin-top: 2px;">
+              Please mention Bill #${data.billNumber} & Flat ${data.flatNumber} in UPI payment notes.
+            </div>
           </div>
         ` : ''}
+      </div>
+
+      <div class="summary-col-totals">
+        <div class="totals-box">
+          ${subtotal > 0 && (previousBalance > 0 || penalty > 0 || credit > 0) ? `
+            <div class="totals-row">
+              <span style="color: #475569;">Subtotal:</span>
+              <span style="font-weight: 600;">${formatCurrency(subtotal)}</span>
+            </div>
+          ` : ''}
+          ${previousBalance > 0 ? `
+            <div class="totals-row">
+              <span style="color: #475569;">Arrears / Prior Balance:</span>
+              <span style="font-weight: 600; color: #dc2626;">+${formatCurrency(previousBalance)}</span>
+            </div>
+          ` : ''}
+          ${penalty > 0 ? `
+            <div class="totals-row">
+              <span style="color: #475569;">Late Fee / Penalty:</span>
+              <span style="font-weight: 600;">+${formatCurrency(penalty)}</span>
+            </div>
+          ` : ''}
+          ${credit > 0 ? `
+            <div class="totals-row">
+              <span style="color: #475569;">Credit / Rebate:</span>
+              <span style="font-weight: 600; color: #16a34a;">-${formatCurrency(credit)}</span>
+            </div>
+          ` : ''}
+          <div class="totals-row grand">
+            <span>Total Payable:</span>
+            <span>${formatCurrency(total)}</span>
+          </div>
+          ${paid > 0 ? `
+            <div class="totals-row" style="color: #16a34a;">
+              <span>Amount Paid:</span>
+              <span>-${formatCurrency(paid)}</span>
+            </div>
+          ` : ''}
+          ${balance !== total ? `
+            <div class="totals-row" style="margin-top: 3px; font-weight: 800; color: ${balance > 0 ? '#dc2626' : '#166534'};">
+              <span>Balance Due:</span>
+              <span>${formatCurrency(balance)}</span>
+            </div>
+          ` : ''}
+        </div>
       </div>
     </div>
 
-    <div class="footer-note">
-      <div>
-        Official maintenance bill generated by <strong>${data.societyName}</strong>.
-      </div>
-      <div style="text-align: right;">
-        Authorized Signatory / Society Management
-      </div>
-    </div>
+    <table class="footer-sign-table">
+      <tr>
+        <td style="width: 60%;">
+          <div>This is a computer-generated invoice issued by <strong>${data.societyName}</strong>.</div>
+          <div style="margin-top: 2px;">No physical signature is required. Generated on ${new Date().toISOString().slice(0, 10)}.</div>
+        </td>
+        <td style="width: 40%; text-align: right;">
+          <div style="font-weight: 700; color: #0f172a;">For ${data.societyName}</div>
+          <div style="margin-top: 28px; border-top: 1px solid #475569; display: inline-block; padding-top: 3px; font-weight: 600;">
+            Authorized Signatory / Treasurer
+          </div>
+        </td>
+      </tr>
+    </table>
   </div>
 </body>
 </html>`;
@@ -391,8 +517,11 @@ export function generateInvoiceHtml(data: PrintableBillData): string {
 export function printInvoiceDocument(data: PrintableBillData) {
   const html = generateInvoiceHtml(data);
 
-  let printFrame = document.getElementById('society-print-iframe') as HTMLIFrameElement | null;
-  if (!printFrame) {
+  try {
+    let printFrame = document.getElementById('society-print-iframe') as HTMLIFrameElement | null;
+    if (printFrame) {
+      printFrame.remove();
+    }
     printFrame = document.createElement('iframe');
     printFrame.id = 'society-print-iframe';
     printFrame.style.position = 'fixed';
@@ -404,24 +533,32 @@ export function printInvoiceDocument(data: PrintableBillData) {
     printFrame.style.opacity = '0';
     printFrame.style.pointerEvents = 'none';
     document.body.appendChild(printFrame);
-  }
 
-  const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
-  if (!frameDoc) {
-    window.print();
-    return;
-  }
+    const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
+    if (frameDoc && printFrame.contentWindow) {
+      frameDoc.open();
+      frameDoc.write(html);
+      frameDoc.close();
 
-  frameDoc.open();
-  frameDoc.write(html);
-  frameDoc.close();
-
-  setTimeout(() => {
-    try {
-      printFrame?.contentWindow?.focus();
-      printFrame?.contentWindow?.print();
-    } catch {
-      window.print();
+      setTimeout(() => {
+        try {
+          printFrame?.contentWindow?.focus();
+          printFrame?.contentWindow?.print();
+        } catch {
+          document.body.classList.add('print-bill-only');
+          window.print();
+          setTimeout(() => document.body.classList.remove('print-bill-only'), 1200);
+        }
+      }, 400);
+      return;
     }
-  }, 350);
+  } catch (err) {
+    console.warn('Iframe print failed, falling back to window.print()', err);
+  }
+
+  document.body.classList.add('print-bill-only');
+  window.print();
+  setTimeout(() => {
+    document.body.classList.remove('print-bill-only');
+  }, 1200);
 }
