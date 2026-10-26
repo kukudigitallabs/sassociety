@@ -3399,6 +3399,32 @@ export async function handleApiRequest(ctx: RequestContext): Promise<void> {
         return sendJson(res, 200, { bills: enriched });
       }
 
+      const singleBillMatch = pathname.match(/^\/api\/society\/bills\/([^/]+)$/);
+      if (singleBillMatch && method === 'GET') {
+        const billId = singleBillMatch[1];
+        const bill = db.prepare(`
+          SELECT mb.*,
+                 COALESCE(h.flat_number, '') as flat_number,
+                 COALESCE(h.normalized_flat_number, '') as normalized_flat_number,
+                 COALESCE(h.block_name, 'A') as block_name,
+                 COALESCE(sm.full_name, 'Household Member') as member_name,
+                 COALESCE(sm.full_name, 'Household Member') as primary_member_name,
+                 sm.email as member_email,
+                 sm.phone as member_phone
+          FROM member_bills mb
+          LEFT JOIN households h ON h.id = mb.household_id
+          LEFT JOIN society_members sm ON sm.id = mb.member_id
+          WHERE mb.id = ? AND mb.society_id = ?
+        `).get(billId, societyId) as Record<string, any> | undefined;
+
+        if (!bill) {
+          return sendJson(res, 404, { error: 'Bill not found.' });
+        }
+
+        const items = db.prepare('SELECT * FROM bill_items WHERE bill_id = ? AND society_id = ? ORDER BY created_at ASC').all(billId, societyId) as Record<string, any>[];
+        return sendJson(res, 200, { bill: { ...bill, items }, items });
+      }
+
       // Generate Monthly Bills (Bulk or Individual) with Duplicate Bill Prevention (Section 6)
       if (pathname === '/api/society/bills/generate' && method === 'POST') {
         const {

@@ -442,8 +442,22 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
               </div>
             </form>
 
-            {/* Instant Demo Access Button */}
-            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.85rem' }}>
+            {/* Instant Demo Access Buttons (1-Click Login) */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-multiline"
+                style={{ justifyContent: 'space-between', padding: '0.75rem 0.95rem', width: '100%', gap: '0.5rem' }}
+                onClick={() => quickLogin('superadmin@societyos.com', 'SuperAdmin@123')}
+                title="Instant Demo Login as Platform Super Admin"
+              >
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                  <strong style={{ fontSize: '0.88rem' }}>1. Platform Super Admin (SaaS Owner)</strong>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>superadmin@societyos.com • Manage societies, plans, trials, revenue</span>
+                </span>
+                <ArrowRight size={16} style={{ flexShrink: 0 }} />
+              </button>
+
               <button
                 type="button"
                 className="btn btn-secondary btn-multiline"
@@ -454,6 +468,48 @@ export const PublicPortal: React.FC<PublicPortalProps> = ({
                 <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
                   <strong style={{ fontSize: '0.88rem' }}>2. Society Admin — Green Valley Residency (Demo)</strong>
                   <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>admin@greenvalley.com • Billing, payment verification, ledger, staff</span>
+                </span>
+                <ArrowRight size={16} style={{ flexShrink: 0 }} />
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-multiline"
+                style={{ justifyContent: 'space-between', padding: '0.75rem 0.95rem', width: '100%', gap: '0.5rem' }}
+                onClick={() => quickLogin('admin@royalpalms.com', 'Admin@123')}
+                title="Instant Demo Login as Society Admin (Trial)"
+              >
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                  <strong style={{ fontSize: '0.88rem' }}>3. Society Admin — Royal Palms Enclave (14-Day Trial)</strong>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>admin@royalpalms.com • Independent tenant isolated from Green Valley</span>
+                </span>
+                <ArrowRight size={16} style={{ flexShrink: 0 }} />
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-multiline"
+                style={{ justifyContent: 'space-between', padding: '0.75rem 0.95rem', width: '100%', gap: '0.5rem' }}
+                onClick={() => quickLogin('cashier@greenvalley.com', 'Staff@123')}
+                title="Instant Demo Login as Society Staff"
+              >
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                  <strong style={{ fontSize: '0.88rem' }}>4. Society Staff — Cashier Role (Permission Scoped)</strong>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>cashier@greenvalley.com • Can verify payments, cannot delete members</span>
+                </span>
+                <ArrowRight size={16} style={{ flexShrink: 0 }} />
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-multiline"
+                style={{ justifyContent: 'space-between', padding: '0.75rem 0.95rem', width: '100%', gap: '0.5rem' }}
+                onClick={() => quickLogin('resident@greenvalley.com', 'Member@123')}
+                title="Instant Demo Login as Resident Member"
+              >
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                  <strong style={{ fontSize: '0.88rem' }}>5. Resident Member — Flat A-101 (Green Valley)</strong>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>resident@greenvalley.com • Pay bills, receipts, complaints, on-duty staff</span>
                 </span>
                 <ArrowRight size={16} style={{ flexShrink: 0 }} />
               </button>

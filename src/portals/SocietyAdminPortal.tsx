@@ -238,6 +238,21 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editingBlockName, setEditingBlockName] = useState<string>('');
   const [isUpdatingBlock, setIsUpdatingBlock] = useState(false);
+
+  const handleOpenPrintInvoice = async (b: any) => {
+    setSelectedInvoice(b);
+    setModal('PRINT_INVOICE');
+    if (!b.items || b.items.length === 0) {
+      try {
+        const res = await apiFetch(`/api/society/bills/${b.id}`);
+        if (res?.bill) {
+          setSelectedInvoice(res.bill);
+        }
+      } catch {
+        // Fallback handled gracefully in invoice modal
+      }
+    }
+  };
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
   const [suppBillForm, setSuppBillForm] = useState({
@@ -1786,10 +1801,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                               <button
                                 type="button"
                                 className="btn btn-secondary btn-sm"
-                                onClick={() => {
-                                  setSelectedInvoice(b);
-                                  setModal('PRINT_INVOICE');
-                                }}
+                                onClick={() => handleOpenPrintInvoice(b)}
                               >
                                 <Printer size={13} /> Invoice
                               </button>
@@ -4855,13 +4867,42 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {(selectedInvoice.items || []).map((it: any) => (
-                    <tr key={it.id}>
-                      <td><strong>{it.category_name}</strong></td>
-                      <td>{it.description}</td>
-                      <td>{formatCurrency(it.amount)}</td>
+                  {selectedInvoice.items && selectedInvoice.items.length > 0 ? (
+                    selectedInvoice.items.map((it: any) => (
+                      <tr key={it.id || `${it.category_name}-${it.amount}`}>
+                        <td><strong>{it.category_name}</strong></td>
+                        <td>{it.description}</td>
+                        <td>{formatCurrency(it.amount)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td><strong>Maintenance Charges</strong></td>
+                      <td>Monthly Regular Society Maintenance ({selectedInvoice.billing_month}/{selectedInvoice.billing_year})</td>
+                      <td>{formatCurrency(selectedInvoice.subtotal_amount || selectedInvoice.total_amount)}</td>
                     </tr>
-                  ))}
+                  )}
+                  {Number(selectedInvoice.previous_balance) > 0 && (
+                    <tr>
+                      <td><strong>Arrears / Previous Dues</strong></td>
+                      <td>Unpaid dues brought forward from previous billing periods</td>
+                      <td>{formatCurrency(selectedInvoice.previous_balance)}</td>
+                    </tr>
+                  )}
+                  {Number(selectedInvoice.penalty_amount) > 0 && (
+                    <tr>
+                      <td><strong>Late Fee / Penalty</strong></td>
+                      <td>Late payment fee applied</td>
+                      <td>{formatCurrency(selectedInvoice.penalty_amount)}</td>
+                    </tr>
+                  )}
+                  {Number(selectedInvoice.credit_amount) > 0 && (
+                    <tr>
+                      <td><strong>Credit / Rebate</strong></td>
+                      <td>Advance or credit concession adjustment</td>
+                      <td style={{ color: 'var(--success)' }}>-{formatCurrency(selectedInvoice.credit_amount)}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

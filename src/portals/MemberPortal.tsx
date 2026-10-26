@@ -1109,13 +1109,42 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {(selectedBill.items || []).map((it: any) => (
-                    <tr key={it.id}>
-                      <td><strong>{it.category_name}</strong></td>
-                      <td>{it.description}</td>
-                      <td>{formatCurrency(it.amount)}</td>
+                  {selectedBill.items && selectedBill.items.length > 0 ? (
+                    selectedBill.items.map((it: any) => (
+                      <tr key={it.id || `${it.category_name}-${it.amount}`}>
+                        <td><strong>{it.category_name}</strong></td>
+                        <td>{it.description}</td>
+                        <td>{formatCurrency(it.amount)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td><strong>Maintenance Charges</strong></td>
+                      <td>Monthly Regular Maintenance ({selectedBill.billing_month}/{selectedBill.billing_year})</td>
+                      <td>{formatCurrency(selectedBill.subtotal_amount || selectedBill.total_amount)}</td>
                     </tr>
-                  ))}
+                  )}
+                  {Number(selectedBill.previous_balance) > 0 && (
+                    <tr>
+                      <td><strong>Arrears / Previous Dues</strong></td>
+                      <td>Unpaid dues brought forward from previous periods</td>
+                      <td>{formatCurrency(selectedBill.previous_balance)}</td>
+                    </tr>
+                  )}
+                  {Number(selectedBill.penalty_amount) > 0 && (
+                    <tr>
+                      <td><strong>Late Fee / Penalty</strong></td>
+                      <td>Late payment fee applied</td>
+                      <td>{formatCurrency(selectedBill.penalty_amount)}</td>
+                    </tr>
+                  )}
+                  {Number(selectedBill.credit_amount) > 0 && (
+                    <tr>
+                      <td><strong>Credit / Rebate</strong></td>
+                      <td>Advance / discount concession adjustment</td>
+                      <td style={{ color: 'var(--success)' }}>-{formatCurrency(selectedBill.credit_amount)}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

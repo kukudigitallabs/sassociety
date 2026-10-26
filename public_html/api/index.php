@@ -338,13 +338,16 @@ if ($cleanPath === '/api/auth/login' && $method === 'POST') {
     $defaultSeeds = [
         'superadmin@societyos.com' => 'SuperAdmin@123',
         'admin@greenvalley.com' => 'Admin@123',
+        'admin@royalpalms.com' => 'Admin@123',
         'admin@society.com' => 'Admin@123',
-        'resident@greenvalley.com' => 'Resident@123',
+        'cashier@greenvalley.com' => 'Staff@123',
+        'resident@greenvalley.com' => 'Member@123',
+        'resident@royalpalms.com' => 'Member@123',
         'resident@society.com' => 'Resident@123',
     ];
 
     if ($user) {
-        if (isset($defaultSeeds[$email]) && $password === $defaultSeeds[$email]) {
+        if (isset($defaultSeeds[$email]) && ($password === $defaultSeeds[$email] || ($email === 'resident@greenvalley.com' && $password === 'Resident@123'))) {
             $valid = true;
         } elseif (password_verify($password, $user['password_hash'])) {
             $valid = true;
@@ -2587,11 +2590,64 @@ if ($cleanPath === '/api/society/bills' && $method === 'GET') {
             } else {
                 $bills = $rawBills;
             }
+
+            if (!empty($bills)) {
+                $billItems = $pdo->query("SELECT * FROM bill_items WHERE society_id = " . $pdo->quote($activeSocId))->fetchAll() ?: [];
+                $itemsByBill = [];
+                foreach ($billItems as $it) {
+                    $itemsByBill[$it['bill_id']][] = $it;
+                }
+                foreach ($bills as &$b) {
+                    $b['items'] = $itemsByBill[$b['id']] ?? [];
+                }
+                unset($b);
+            }
         } catch (\Throwable $e) {}
     }
 
     http_response_code(200);
     echo json_encode(['bills' => $bills], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+if (preg_match('#^/api/society/bills/([a-zA-Z0-9_-]+)$#', $cleanPath, $m) && $method === 'GET') {
+    $billId = $m[1];
+    $bill = null;
+    $items = [];
+    if ($pdo && !empty($activeSocId)) {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT b.*,
+                       COALESCE(h.flat_number, '') as flat_number,
+                       COALESCE(h.normalized_flat_number, '') as normalized_flat_number,
+                       COALESCE(h.block_name, 'A') as block_name,
+                       COALESCE(sm.full_name, 'Household Member') as member_name,
+                       COALESCE(sm.full_name, 'Household Member') as primary_member_name,
+                       sm.email as member_email,
+                       sm.phone as member_phone
+                FROM member_bills b
+                LEFT JOIN households h ON h.id = b.household_id
+                LEFT JOIN society_members sm ON sm.id = b.member_id
+                WHERE b.id = ? AND b.society_id = ?
+                LIMIT 1
+            ");
+            $stmt->execute([$billId, $activeSocId]);
+            $bill = $stmt->fetch();
+            if ($bill) {
+                $iStmt = $pdo->prepare("SELECT * FROM bill_items WHERE bill_id = ? AND society_id = ? ORDER BY created_at ASC");
+                $iStmt->execute([$billId, $activeSocId]);
+                $items = $iStmt->fetchAll() ?: [];
+                $bill['items'] = $items;
+            }
+        } catch (\Throwable $e) {}
+    }
+    if (!$bill) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Bill not found.']);
+        exit;
+    }
+    http_response_code(200);
+    echo json_encode(['bill' => $bill, 'items' => $items], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
@@ -3498,7 +3554,25 @@ if ($cleanPath === '/api/member/dashboard' && $method === 'GET') {
                 $socId = $member['society_id'];
                 $society = $pdo->query("SELECT * FROM societies WHERE id = " . $pdo->quote($socId))->fetch() ?: null;
                 $settings = $pdo->query("SELECT * FROM society_settings WHERE society_id = " . $pdo->quote($socId))->fetch() ?: null;
-                $bills = $pdo->query("SELECT * FROM member_bills WHERE society_id = " . $pdo->quote($socId) . " ORDER BY created_at DESC LIMIT 12")->fetchAll() ?: [];
+                $bills = $pdo->query("
+                    SELECT * FROM member_bills 
+                    WHERE society_id = " . $pdo->quote($socId) . " 
+                      AND (household_id = " . $pdo->quote($member['household_id']) . " OR member_id = " . $pdo->quote($member['id']) . ") 
+                      AND status != 'DRAFT' 
+                    ORDER BY billing_year DESC, billing_month DESC, created_at DESC 
+                    LIMIT 24
+                ")->fetchAll() ?: [];
+                if (!empty($bills)) {
+                    $billItems = $pdo->query("SELECT * FROM bill_items WHERE society_id = " . $pdo->quote($socId) . " AND household_id = " . $pdo->quote($member['household_id']))->fetchAll() ?: [];
+                    $itemsByBill = [];
+                    foreach ($billItems as $it) {
+                        $itemsByBill[$it['bill_id']][] = $it;
+                    }
+                    foreach ($bills as &$b) {
+                        $b['items'] = $itemsByBill[$b['id']] ?? [];
+                    }
+                    unset($b);
+                }
                 $complaints = $pdo->query("SELECT * FROM complaints WHERE society_id = " . $pdo->quote($socId) . " AND (member_id = " . $pdo->quote($member['id']) . " OR household_id = " . $pdo->quote($member['household_id']) . ") ORDER BY created_at DESC")->fetchAll() ?: [];
                 $memberAtts = $pdo->query("SELECT * FROM complaint_attachments WHERE society_id = " . $pdo->quote($socId))->fetchAll() ?: [];
                 $memberComms = $pdo->query("SELECT * FROM complaint_comments WHERE society_id = " . $pdo->quote($socId) . " AND is_internal = 0 ORDER BY created_at ASC")->fetchAll() ?: [];
