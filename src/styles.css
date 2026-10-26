@@ -866,19 +866,28 @@
 
     /* CRITICAL FIX: When printing any invoice, receipt, or bill modal,
        HIDE the entire background main-area, page-content, and all underlying tabs.
-       This ensures ONLY the bill/receipt document prints cleanly without background page clutter! */
-    body:has(.modal-backdrop) .main-area,
-    body:has(.modal-backdrop) .page-content,
-    body:has(.modal-backdrop) .app-shell > *:not(.modal-backdrop),
-    .app-shell:has(.modal-backdrop) .main-area,
-    .app-shell:has(.modal-backdrop) .page-content,
-    .app-shell:has(.modal-backdrop) > *:not(.modal-backdrop),
-    body.modal-open .main-area,
-    body.modal-open .page-content,
-    body.modal-open .app-shell > *:not(.modal-backdrop),
+       Separated into independent rules to ensure cross-browser fault tolerance! */
     body.print-bill-only .main-area,
     body.print-bill-only .page-content,
     body.print-bill-only .app-shell > *:not(.modal-backdrop) {
+      display: none !important;
+    }
+
+    body.modal-open .main-area,
+    body.modal-open .page-content,
+    body.modal-open .app-shell > *:not(.modal-backdrop) {
+      display: none !important;
+    }
+
+    body:has(.modal-backdrop) .main-area,
+    body:has(.modal-backdrop) .page-content,
+    body:has(.modal-backdrop) .app-shell > *:not(.modal-backdrop) {
+      display: none !important;
+    }
+
+    .app-shell:has(.modal-backdrop) .main-area,
+    .app-shell:has(.modal-backdrop) .page-content,
+    .app-shell:has(.modal-backdrop) > *:not(.modal-backdrop) {
       display: none !important;
     }
 

@@ -46,6 +46,7 @@ import { type Language, t, formatCurrency } from '../i18n.ts';
 import { UpiQrCard } from '../components/UpiQrCard.tsx';
 import { ResponsiveLogo } from '../components/ResponsiveLogo.tsx';
 import { SubscriptionInvoiceModal } from '../components/SubscriptionInvoiceModal.tsx';
+import { printInvoiceDocument } from '../utils/invoicePrinter.ts';
 
 interface SocietyAdminPortalProps {
   user: any;
@@ -258,6 +259,35 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
     setTimeout(() => {
       document.body.classList.remove('print-bill-only');
     }, 1200);
+  };
+
+  const handlePrintCurrentInvoice = () => {
+    if (!selectedInvoice) return;
+    printInvoiceDocument({
+      societyName: currentSociety.name,
+      societyAddress: currentSociety.address,
+      societyRegNo: currentSociety.registration_number,
+      societyPhone: currentSociety.contact_phone,
+      societyEmail: currentSociety.contact_email,
+      billNumber: selectedInvoice.bill_number,
+      billingMonth: selectedInvoice.billing_month,
+      billingYear: selectedInvoice.billing_year,
+      invoiceDate: (selectedInvoice.created_at || '').slice(0, 10),
+      flatNumber: selectedInvoice.flat_number,
+      blockName: selectedInvoice.block_name,
+      memberName: selectedInvoice.member_name || selectedInvoice.primary_member_name || 'Resident Member',
+      memberPhone: selectedInvoice.member_phone,
+      dueDate: selectedInvoice.due_date,
+      status: selectedInvoice.status,
+      items: selectedInvoice.items || [],
+      subtotalAmount: selectedInvoice.subtotal_amount,
+      previousBalance: selectedInvoice.previous_balance,
+      penaltyAmount: selectedInvoice.penalty_amount,
+      creditAmount: selectedInvoice.credit_amount,
+      totalAmount: selectedInvoice.total_amount,
+      paidAmount: selectedInvoice.paid_amount,
+      balanceAmount: selectedInvoice.balance_amount,
+    });
   };
 
   const handleOpenPrintInvoice = async (b: any) => {
@@ -4879,51 +4909,58 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
               <strong>Billed To:</strong> Flat {selectedInvoice.flat_number} ({selectedInvoice.member_name || 'Resident'}) • Due Date: <strong>{selectedInvoice.due_date}</strong>
             </div>
             <div className="table-wrap">
-              <table className="data-table" style={{ marginBottom: '1rem' }}>
+              <table className="data-table" style={{ marginBottom: '1rem', width: '100%', tableLayout: 'fixed' }}>
                 <thead>
                   <tr>
-                    <th>Charge Head</th>
-                    <th>Description</th>
-                    <th>Amount</th>
+                    <th style={{ width: '28%', textAlign: 'left' }}>Charge Head</th>
+                    <th style={{ width: '50%', textAlign: 'left' }}>Description</th>
+                    <th style={{ width: '22%', textAlign: 'right' }}>Amount</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {selectedInvoice.items && selectedInvoice.items.length > 0 ? (
-                    selectedInvoice.items.map((it: any) => (
-                      <tr key={it.id || `${it.category_name}-${it.amount}`}>
-                        <td><strong>{it.category_name}</strong></td>
-                        <td>{it.description}</td>
-                        <td>{formatCurrency(it.amount)}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td><strong>Maintenance Charges</strong></td>
-                      <td>Monthly Regular Society Maintenance ({selectedInvoice.billing_month}/{selectedInvoice.billing_year})</td>
-                      <td>{formatCurrency(selectedInvoice.subtotal_amount || selectedInvoice.total_amount)}</td>
-                    </tr>
-                  )}
-                  {Number(selectedInvoice.previous_balance) > 0 && (
-                    <tr>
-                      <td><strong>Arrears / Previous Dues</strong></td>
-                      <td>Unpaid dues brought forward from previous billing periods</td>
-                      <td>{formatCurrency(selectedInvoice.previous_balance)}</td>
-                    </tr>
-                  )}
-                  {Number(selectedInvoice.penalty_amount) > 0 && (
-                    <tr>
-                      <td><strong>Late Fee / Penalty</strong></td>
-                      <td>Late payment fee applied</td>
-                      <td>{formatCurrency(selectedInvoice.penalty_amount)}</td>
-                    </tr>
-                  )}
-                  {Number(selectedInvoice.credit_amount) > 0 && (
-                    <tr>
-                      <td><strong>Credit / Rebate</strong></td>
-                      <td>Advance or credit concession adjustment</td>
-                      <td style={{ color: 'var(--success)' }}>-{formatCurrency(selectedInvoice.credit_amount)}</td>
-                    </tr>
-                  )}
+                  {(() => {
+                    const validItems = (selectedInvoice.items || []).filter((it: any) => Math.abs(Number(it.amount)) > 0);
+                    return (
+                      <>
+                        {validItems.length > 0 ? (
+                          validItems.map((it: any) => (
+                            <tr key={it.id || `${it.category_name}-${it.amount}`}>
+                              <td style={{ fontWeight: 600, wordBreak: 'break-word' }}>{it.category_name || 'Maintenance Charge'}</td>
+                              <td style={{ color: 'var(--text-muted)', wordBreak: 'break-word' }}>{it.description}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatCurrency(it.amount)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Maintenance Charges</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Monthly Regular Society Maintenance ({selectedInvoice.billing_month}/{selectedInvoice.billing_year})</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(selectedInvoice.subtotal_amount || selectedInvoice.total_amount)}</td>
+                          </tr>
+                        )}
+                        {Number(selectedInvoice.previous_balance) > 0 && (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Arrears / Previous Dues</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Unpaid dues brought forward from previous billing periods</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--danger)' }}>{formatCurrency(selectedInvoice.previous_balance)}</td>
+                          </tr>
+                        )}
+                        {Number(selectedInvoice.penalty_amount) > 0 && (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Late Fee / Penalty</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Late payment fee applied</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(selectedInvoice.penalty_amount)}</td>
+                          </tr>
+                        )}
+                        {Number(selectedInvoice.credit_amount) > 0 && (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Credit / Rebate</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Advance or credit concession adjustment</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--success)' }}>-{formatCurrency(selectedInvoice.credit_amount)}</td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -4932,7 +4969,7 @@ export const SocietyAdminPortal: React.FC<SocietyAdminPortalProps> = ({
             </div>
             <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Close</button>
-              <button type="button" className="btn btn-primary" onClick={handlePrintDocument}>
+              <button type="button" className="btn btn-primary" onClick={handlePrintCurrentInvoice}>
                 <Printer size={15} /> Print / Download PDF
               </button>
             </div>

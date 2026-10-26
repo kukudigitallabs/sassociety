@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { apiFetch, uploadFileAsBase64, openRazorpayCheckout, isValid10DigitPhone, clean10DigitPhone } from '../api.ts';
 import { type Language, t, formatCurrency } from '../i18n.ts';
+import { printInvoiceDocument } from '../utils/invoicePrinter.ts';
 
 interface MemberPortalProps {
   user: any;
@@ -87,6 +88,35 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
     setTimeout(() => {
       document.body.classList.remove('print-bill-only');
     }, 1200);
+  };
+
+  const handlePrintCurrentBill = () => {
+    if (!selectedBill) return;
+    printInvoiceDocument({
+      societyName: society.name,
+      societyAddress: society.address,
+      societyRegNo: society.registration_number,
+      societyPhone: society.contact_phone,
+      societyEmail: society.contact_email,
+      billNumber: selectedBill.bill_number,
+      billingMonth: selectedBill.billing_month,
+      billingYear: selectedBill.billing_year,
+      invoiceDate: (selectedBill.created_at || '').slice(0, 10),
+      flatNumber: member.flat_number,
+      blockName: member.block_name,
+      memberName: member.full_name || 'Resident Member',
+      memberPhone: member.phone,
+      dueDate: selectedBill.due_date,
+      status: selectedBill.status,
+      items: selectedBill.items || [],
+      subtotalAmount: selectedBill.subtotal_amount,
+      previousBalance: selectedBill.previous_balance,
+      penaltyAmount: selectedBill.penalty_amount,
+      creditAmount: selectedBill.credit_amount,
+      totalAmount: selectedBill.total_amount,
+      paidAmount: selectedBill.paid_amount,
+      balanceAmount: selectedBill.balance_amount,
+    });
   };
 
   // Payment Submission Form
@@ -1121,51 +1151,58 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
               Flat {member.flat_number} ({member.full_name}) • Billing Period: {selectedBill.billing_month}/{selectedBill.billing_year} • Due: {selectedBill.due_date}
             </p>
             <div className="table-wrap">
-              <table className="data-table" style={{ marginBottom: '1rem' }}>
+              <table className="data-table" style={{ marginBottom: '1rem', width: '100%', tableLayout: 'fixed' }}>
                 <thead>
                   <tr>
-                    <th>Charge Category</th>
-                    <th>Description</th>
-                    <th>Amount</th>
+                    <th style={{ width: '28%', textAlign: 'left' }}>Charge Head</th>
+                    <th style={{ width: '50%', textAlign: 'left' }}>Description</th>
+                    <th style={{ width: '22%', textAlign: 'right' }}>Amount</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {selectedBill.items && selectedBill.items.length > 0 ? (
-                    selectedBill.items.map((it: any) => (
-                      <tr key={it.id || `${it.category_name}-${it.amount}`}>
-                        <td><strong>{it.category_name}</strong></td>
-                        <td>{it.description}</td>
-                        <td>{formatCurrency(it.amount)}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td><strong>Maintenance Charges</strong></td>
-                      <td>Monthly Regular Maintenance ({selectedBill.billing_month}/{selectedBill.billing_year})</td>
-                      <td>{formatCurrency(selectedBill.subtotal_amount || selectedBill.total_amount)}</td>
-                    </tr>
-                  )}
-                  {Number(selectedBill.previous_balance) > 0 && (
-                    <tr>
-                      <td><strong>Arrears / Previous Dues</strong></td>
-                      <td>Unpaid dues brought forward from previous periods</td>
-                      <td>{formatCurrency(selectedBill.previous_balance)}</td>
-                    </tr>
-                  )}
-                  {Number(selectedBill.penalty_amount) > 0 && (
-                    <tr>
-                      <td><strong>Late Fee / Penalty</strong></td>
-                      <td>Late payment fee applied</td>
-                      <td>{formatCurrency(selectedBill.penalty_amount)}</td>
-                    </tr>
-                  )}
-                  {Number(selectedBill.credit_amount) > 0 && (
-                    <tr>
-                      <td><strong>Credit / Rebate</strong></td>
-                      <td>Advance / discount concession adjustment</td>
-                      <td style={{ color: 'var(--success)' }}>-{formatCurrency(selectedBill.credit_amount)}</td>
-                    </tr>
-                  )}
+                  {(() => {
+                    const validItems = (selectedBill.items || []).filter((it: any) => Math.abs(Number(it.amount)) > 0);
+                    return (
+                      <>
+                        {validItems.length > 0 ? (
+                          validItems.map((it: any) => (
+                            <tr key={it.id || `${it.category_name}-${it.amount}`}>
+                              <td style={{ fontWeight: 600, wordBreak: 'break-word' }}>{it.category_name || 'Maintenance Charge'}</td>
+                              <td style={{ color: 'var(--text-muted)', wordBreak: 'break-word' }}>{it.description}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatCurrency(it.amount)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Maintenance Charges</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Monthly Regular Maintenance ({selectedBill.billing_month}/{selectedBill.billing_year})</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(selectedBill.subtotal_amount || selectedBill.total_amount)}</td>
+                          </tr>
+                        )}
+                        {Number(selectedBill.previous_balance) > 0 && (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Arrears / Previous Dues</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Unpaid dues brought forward from previous periods</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--danger)' }}>{formatCurrency(selectedBill.previous_balance)}</td>
+                          </tr>
+                        )}
+                        {Number(selectedBill.penalty_amount) > 0 && (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Late Fee / Penalty</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Late payment fee applied</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(selectedBill.penalty_amount)}</td>
+                          </tr>
+                        )}
+                        {Number(selectedBill.credit_amount) > 0 && (
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>Credit / Rebate</td>
+                            <td style={{ color: 'var(--text-muted)' }}>Advance / discount concession adjustment</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--success)' }}>-{formatCurrency(selectedBill.credit_amount)}</td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -1174,7 +1211,7 @@ export const MemberPortal: React.FC<MemberPortalProps> = ({
             </div>
             <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setModal('NONE')}>Close</button>
-              <button type="button" className="btn btn-primary" onClick={handlePrintDocument}>
+              <button type="button" className="btn btn-primary" onClick={handlePrintCurrentBill}>
                 <Printer size={15} /> Print / Save PDF
               </button>
             </div>
